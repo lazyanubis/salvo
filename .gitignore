@@ -3,7 +3,7 @@
 Cargo.lock
 **/Cargo.lock
 /.idea
-/.vscode
+# /.vscode
 **/target
 /.vs
 /examples/_*.rs
@@ -22,3 +22,4 @@ examples/**/pnpm-lock.yaml
 
 .DS_Store
 .claude
+deps.txt
