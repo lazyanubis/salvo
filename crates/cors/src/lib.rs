@@ -461,6 +461,7 @@ pub fn preflight_request_headers() -> impl Iterator<Item = HeaderName> {
     .into_iter()
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[cfg(test)]
 mod tests {
     use salvo_core::http::header::*;
