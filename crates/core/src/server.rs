@@ -365,7 +365,7 @@ impl<A: Acceptor + Send> Server<A> {
         }
     }
     /// Try to serve a [`Service`].
-    #[cfg(not(target_arch = "wasm32"))] // ? fuse
+    #[cfg(not(target_family = "wasm"))] // ? fuse
     #[cfg(not(feature = "server-handle"))]
     pub async fn try_serve<S>(self, service: S) -> IoResult<()>
     where

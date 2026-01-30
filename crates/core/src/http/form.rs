@@ -1,29 +1,29 @@
 //! Form parse module.
-#[cfg(not(target_arch = "wasm32"))] // ? unused on wasm32
+#[cfg(not(target_family = "wasm"))] // ? unused on wasm32
 use std::ffi::OsStr;
-#[cfg(not(target_arch = "wasm32"))] // ? unused on wasm32
+#[cfg(not(target_family = "wasm"))] // ? unused on wasm32
 use std::io::{Cursor, Write};
-#[cfg(not(target_arch = "wasm32"))] // ? unused on wasm32
+#[cfg(not(target_family = "wasm"))] // ? unused on wasm32
 use std::path::{Path, PathBuf};
 
-#[cfg(not(target_arch = "wasm32"))] // ? unused on wasm32
+#[cfg(not(target_family = "wasm"))] // ? unused on wasm32
 use base64::engine::Engine;
-#[cfg(not(target_arch = "wasm32"))] // ? unused on wasm32
+#[cfg(not(target_family = "wasm"))] // ? unused on wasm32
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::{Bytes, BytesMut};
 use futures_util::stream::{Stream, TryStreamExt};
 use mime::Mime;
 use multer::{Field, Multipart};
 use multimap::MultiMap;
-#[cfg(not(target_arch = "wasm32"))] // ? unsupported on wasm, use getrandom
+#[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
 use rand::TryRngCore;
-#[cfg(not(target_arch = "wasm32"))] // ? unsupported on wasm, use getrandom
+#[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
 use rand::rngs::OsRng;
-#[cfg(not(target_arch = "wasm32"))] // ? unsupported on wasm, no os
+#[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, no os
 use tempfile::Builder;
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 use tokio::fs::File;
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 use tokio::io::AsyncWriteExt;
 
 use crate::http::ParseError;
@@ -131,20 +131,20 @@ pub struct FilePart {
     /// The headers of the part
     headers: HeaderMap,
     /// A temporary file containing the file content
-    #[cfg(not(target_arch = "wasm32"))] // ? no os
+    #[cfg(not(target_family = "wasm"))] // ? no os
     path: PathBuf,
     /// Optionally, the size of the file.  This is filled when multiparts are parsed, but is
     /// not necessary when they are generated.
     size: u64,
     // The temporary directory the upload was put into, saved for the Drop trait
-    #[cfg(not(target_arch = "wasm32"))] // ? no os
+    #[cfg(not(target_family = "wasm"))] // ? no os
     temp_dir: Option<PathBuf>,
     /// custom file on wasm
-    #[cfg(target_arch = "wasm32")] // ? unsupported on wasm
+    #[cfg(target_family = "wasm")] // ? unsupported on wasm
     pub file: CustomFile,
 }
 /// Custom file struct for wasm.
-#[cfg(target_arch = "wasm32")] // ? unsupported on wasm
+#[cfg(target_family = "wasm")] // ? unsupported on wasm
 #[derive(Clone, Debug)]
 pub struct CustomFile {
     /// The file name
@@ -189,7 +189,7 @@ impl FilePart {
             .and_then(|v| v.parse().ok())
     }
     /// Get file path.
-    #[cfg(not(target_arch = "wasm32"))] // ? no os
+    #[cfg(not(target_family = "wasm"))] // ? no os
     #[inline]
     #[must_use]
     pub fn path(&self) -> &PathBuf {
@@ -203,7 +203,7 @@ impl FilePart {
     }
     /// If you do not want the file on disk to be deleted when Self drops, call this
     /// function.  It will become your responsibility to clean up.
-    #[cfg(not(target_arch = "wasm32"))] // ? no os
+    #[cfg(not(target_family = "wasm"))] // ? no os
     #[inline]
     pub fn do_not_delete_on_drop(&mut self) {
         self.temp_dir = None;
@@ -211,7 +211,7 @@ impl FilePart {
 
     /// Create a new temporary FilePart (when created this way, the file will be
     /// deleted once the FilePart object goes out of scope).
-    #[cfg(not(target_arch = "wasm32"))] // ? no os
+    #[cfg(not(target_family = "wasm"))] // ? no os
     pub async fn create(field: &mut Field<'_>) -> Result<Self, ParseError> {
         // Setup a file to capture the contents.
         let mut path =
@@ -255,7 +255,7 @@ impl FilePart {
     }
     /// Create a new temporary FilePart from Field (when created this way, the file will be
     /// deleted once the FilePart object goes out of scope).
-    #[cfg(target_arch = "wasm32")] // ? no os
+    #[cfg(target_family = "wasm")] // ? no os
     pub async fn create(field: &mut Field<'_>) -> Result<Self, ParseError> {
         let name = field.file_name().map(|s| s.to_string());
         let mut bytes: Vec<u8> = vec![];
@@ -278,7 +278,7 @@ impl FilePart {
         })
     }
 }
-#[cfg(not(target_arch = "wasm32"))] // ? unsupported on wasm
+#[cfg(not(target_family = "wasm"))] // ? unsupported on wasm
 impl Drop for FilePart {
     fn drop(&mut self) {
         if let Some(temp_dir) = &self.temp_dir {
@@ -293,7 +293,7 @@ impl Drop for FilePart {
 }
 
 // Port from https://github.com/mikedilger/textnonce/blob/master/src/lib.rs
-#[cfg(not(target_arch = "wasm32"))] // ? no os
+#[cfg(not(target_family = "wasm"))] // ? no os
 fn text_nonce() -> String {
     const BYTE_LEN: usize = 24;
     let mut raw: Vec<u8> = vec![0; BYTE_LEN];

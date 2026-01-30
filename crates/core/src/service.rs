@@ -10,7 +10,7 @@ use hyper::{Method, Request as HyperRequest, Response as HyperResponse};
 
 use crate::catcher::{Catcher, write_error_default};
 use crate::conn::SocketAddr;
-#[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+#[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
 use crate::fuse::ArcFusewire;
 use crate::handler::{Handler, WhenHoop};
 use crate::http::body::{ReqBody, ResBody};
@@ -154,7 +154,7 @@ impl Service {
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
         http_scheme: Scheme,
-        #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+        #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         fusewire: Option<ArcFusewire>,
         alt_svc_h3: Option<HeaderValue>,
     ) -> HyperHandler {
@@ -166,7 +166,7 @@ impl Service {
             catcher: self.catcher.clone(),
             hoops: self.hoops.clone(),
             allowed_media_types: self.allowed_media_types.clone(),
-            #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+            #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
             fusewire,
             alt_svc_h3,
         }
@@ -180,7 +180,7 @@ impl Service {
             request.local_addr.clone(),
             request.remote_addr.clone(),
             request.scheme.clone(),
-            #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+            #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
             None,
             None,
         )
@@ -226,7 +226,7 @@ pub struct HyperHandler {
     pub(crate) catcher: Option<Arc<Catcher>>,
     pub(crate) hoops: Vec<Arc<dyn Handler>>,
     pub(crate) allowed_media_types: Arc<Vec<Mime>>,
-    #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+    #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
     pub(crate) fusewire: Option<ArcFusewire>,
     pub(crate) alt_svc_h3: Option<HeaderValue>,
 }
@@ -431,11 +431,11 @@ where
                 *req.uri_mut() = uri;
             }
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(target_family = "wasm")]
         let request = Request::from_hyper(req, scheme);
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(target_family = "wasm"))]
         let mut request = Request::from_hyper(req, scheme);
-        #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+        #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         request.body.set_fusewire(self.fusewire.clone());
         let response = self.handle(request);
         Box::pin(async move { Ok(response.await.into_hyper()) })

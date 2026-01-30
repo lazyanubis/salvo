@@ -8,7 +8,7 @@ use http_body_util::BodyExt;
 use mime::Mime;
 use serde::de::DeserializeOwned;
 use tokio::io::Error as IoError;
-#[cfg(not(target_arch = "wasm32"))] // ? zstd is not support wasm32
+#[cfg(not(target_family = "wasm"))] // ? zstd is not support wasm32
 use zstd::stream::write::Decoder as ZstdDecoder;
 
 use crate::Error;
@@ -114,7 +114,7 @@ impl ResponseExt for Response {
                     decoder.flush()?;
                     full = decoder.get_mut().take();
                 }
-                #[cfg(not(target_arch = "wasm32"))] // ? zstd is not support wasm32
+                #[cfg(not(target_family = "wasm"))] // ? zstd is not support wasm32
                 "zstd" => {
                     let mut decoder =
                         ZstdDecoder::new(Writer::new()).expect("failed to create zstd decoder");

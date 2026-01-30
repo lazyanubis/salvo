@@ -50,35 +50,35 @@
 //! ```
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Result as IoResult;
-#[cfg(not(target_arch = "wasm32"))] // ? unused on wasm32
+#[cfg(not(target_family = "wasm"))] // ? unused on wasm32
 use std::pin::Pin;
-#[cfg(not(target_arch = "wasm32"))] // ? unused on wasm32
+#[cfg(not(target_family = "wasm"))] // ? unused on wasm32
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 use std::task::{Context, Poll};
 
-#[cfg(target_arch = "wasm32")] // ? unused on wasm32
+#[cfg(target_family = "wasm")] // ? unused on wasm32
 use futures_util::future::BoxFuture;
-#[cfg(not(target_arch = "wasm32"))] // ? unused on wasm32
+#[cfg(not(target_family = "wasm"))] // ? unused on wasm32
 use futures_util::future::{BoxFuture, FutureExt};
 use http::uri::Scheme;
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 use tokio_util::sync::CancellationToken;
 
-#[cfg(not(target_arch = "wasm32"))] // ? fuse
+#[cfg(not(target_family = "wasm"))] // ? fuse
 use crate::fuse::{ArcFuseFactory, ArcFusewire};
 use crate::http::Version;
 use crate::service::HyperHandler;
 
-#[cfg(not(target_arch = "wasm32"))] // ? fuse
+#[cfg(not(target_family = "wasm"))] // ? fuse
 mod proto;
-#[cfg(not(target_arch = "wasm32"))] // ? fuse
+#[cfg(not(target_family = "wasm"))] // ? fuse
 pub use proto::HttpBuilder;
-#[cfg(not(target_arch = "wasm32"))] // ? fuse
+#[cfg(not(target_family = "wasm"))] // ? fuse
 mod stream;
-#[cfg(not(target_arch = "wasm32"))] // ? fuse
+#[cfg(not(target_family = "wasm"))] // ? fuse
 pub use stream::*;
 
 cfg_feature! {
@@ -116,14 +116,14 @@ cfg_feature! {
 pub mod addr;
 pub use addr::SocketAddr;
 
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::{io, net}
+#[cfg(not(target_family = "wasm"))] // ? tokio::{io, net}
 pub mod tcp;
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::{io, net}
+#[cfg(not(target_family = "wasm"))] // ? tokio::{io, net}
 pub use tcp::TcpListener;
 
-#[cfg(not(target_arch = "wasm32"))] // ? fuse
+#[cfg(not(target_family = "wasm"))] // ? fuse
 mod joined;
-#[cfg(not(target_arch = "wasm32"))] // ? fuse
+#[cfg(not(target_family = "wasm"))] // ? fuse
 pub use joined::{JoinedAcceptor, JoinedListener};
 
 cfg_feature! {
@@ -201,7 +201,7 @@ where
     ///
     /// When set, this allows the connection to be monitored for slow HTTP attacks
     /// and other malicious behavior patterns.
-    #[cfg(not(target_arch = "wasm32"))] // ? fuse
+    #[cfg(not(target_family = "wasm"))] // ? fuse
     pub fusewire: Option<ArcFusewire>,
     /// The local address this connection was accepted on.
     ///
@@ -249,7 +249,7 @@ where
         let Self {
             coupler,
             stream,
-            #[cfg(not(target_arch = "wasm32"))] // ? fuse
+            #[cfg(not(target_family = "wasm"))] // ? fuse
             fusewire,
             local_addr,
             remote_addr,
@@ -258,7 +258,7 @@ where
         Accepted {
             coupler: coupler_fn(coupler),
             stream: stream_fn(stream),
-            #[cfg(not(target_arch = "wasm32"))] // ? fuse
+            #[cfg(not(target_family = "wasm"))] // ? fuse
             fusewire,
             local_addr,
             remote_addr,
@@ -323,7 +323,7 @@ pub trait Acceptor: Send {
     /// Returns an I/O error if the connection cannot be accepted.
     fn accept(
         &mut self,
-        #[cfg(not(target_arch = "wasm32"))] // ? fuse
+        #[cfg(not(target_family = "wasm"))] // ? fuse
         fuse_factory: Option<ArcFuseFactory>,
     ) -> impl Future<Output = IoResult<Accepted<Self::Coupler, Self::Stream>>> + Send;
 }
@@ -404,9 +404,9 @@ pub trait Coupler: Send {
         &self,
         stream: Self::Stream,
         handler: HyperHandler,
-        #[cfg(not(target_arch = "wasm32"))] // ? fuse
+        #[cfg(not(target_family = "wasm"))] // ? fuse
         builder: Arc<HttpBuilder>,
-        #[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+        #[cfg(not(target_family = "wasm"))] // ? tokio::io
         graceful_stop_token: Option<CancellationToken>,
     ) -> BoxFuture<'static, IoResult<()>>;
 }
@@ -448,7 +448,7 @@ pub trait Coupler: Send {
 /// let combined = TcpListener::new("0.0.0.0:80")
 ///     .join(TcpListener::new("0.0.0.0:443"));
 /// ```
-#[cfg(not(target_arch = "wasm32"))] // ? fuse
+#[cfg(not(target_family = "wasm"))] // ? fuse
 pub trait Listener: Send {
     /// The type of acceptor this listener produces.
     type Acceptor: Acceptor;
@@ -509,13 +509,13 @@ pub trait Listener: Send {
 ///
 /// Using `DynStream` incurs the cost of dynamic dispatch. For performance-critical
 /// applications, prefer using concrete stream types when possible.】
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 pub struct DynStream {
     reader: Box<dyn AsyncRead + Send + Unpin + 'static>,
     writer: Box<dyn AsyncWrite + Send + Unpin + 'static>,
 }
 
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 impl DynStream {
     fn new(stream: impl AsyncRead + AsyncWrite + Send + 'static) -> Self {
         let (reader, writer) = tokio::io::split(stream);
@@ -526,14 +526,14 @@ impl DynStream {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 impl Debug for DynStream {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("DynStream").finish()
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 impl AsyncRead for DynStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -545,7 +545,7 @@ impl AsyncRead for DynStream {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 impl AsyncWrite for DynStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
