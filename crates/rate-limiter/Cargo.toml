@@ -19,9 +19,10 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["moka-store", "fixed-guard", "sliding-guard"]
-full = ["moka-store", "fixed-guard", "sliding-guard"]
+default = ["worker-store", "fixed-guard", "sliding-guard"]
+full = ["worker-store", "fixed-guard", "sliding-guard"]
 moka-store = ["dep:moka"]
+worker-store = []
 fixed-guard = []
 sliding-guard = []
 
@@ -33,9 +34,23 @@ time = { workspace = true, features = ["serde"] }
 tracing = { workspace = true }
 tokio = { workspace = true }
 
+ciborium = { workspace = true }
+worker = { workspace = true }
+
+
 [dev-dependencies]
 salvo_core = { workspace = true, features = ["test"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
+
+[package.metadata.release]
+release = false
+
+# https://github.com/rustwasm/wasm-pack/issues/1247
+# [package.metadata.wasm-pack.profile.release]
+# wasm-opt = false
+
+# [lib]
+# crate-type = ["cdylib"]

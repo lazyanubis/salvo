@@ -17,7 +17,7 @@ pub trait QuotaGetter<Key>: Send + Sync + 'static {
     fn get<Q>(&self, key: &Q) -> impl Future<Output = Result<Self::Quota, Self::Error>> + Send
     where
         Key: Borrow<Q>,
-        Q: Hash + Eq + Sync;
+        Q: Hash + Eq + Sync + AsRef<str>;
 }
 
 /// A basic quota.

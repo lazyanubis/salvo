@@ -93,7 +93,9 @@ use std::borrow::Borrow;
 use std::error::Error as StdError;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
-use std::net::IpAddr;
+// use std::net::IpAddr; // ? AsRef<str>
+
+use serde::{Serialize, de::DeserializeOwned};
 
 use salvo_core::handler::{Skipper, none_skipper};
 use salvo_core::http::{HeaderValue, Request, Response, StatusCode, StatusError};
@@ -109,6 +111,13 @@ cfg_feature! {
 
     mod moka_store;
     pub use moka_store::MokaStore;
+}
+
+cfg_feature! {
+    #![feature = "worker-store"]
+
+    mod worker_store;
+    pub use worker_store::WorkerStore;
 }
 
 cfg_feature! {
@@ -128,7 +137,7 @@ cfg_feature! {
 /// Issuer is used to identify every request.
 pub trait RateIssuer: Send + Sync + 'static {
     /// The key is used to identify the rate limit.
-    type Key: Hash + Eq + Send + Sync + 'static;
+    type Key: Hash + Eq + Send + Sync + 'static + AsRef<str>;
     /// Issue a new key for the request.
     fn issue(
         &self,
@@ -139,7 +148,7 @@ pub trait RateIssuer: Send + Sync + 'static {
 impl<F, K> RateIssuer for F
 where
     F: Fn(&mut Request, &Depot) -> Option<K> + Send + Sync + 'static,
-    K: Hash + Eq + Send + Sync + 'static,
+    K: Hash + Eq + Send + Sync + 'static + AsRef<str>,
 {
     type Key = K;
     async fn issue(&self, req: &mut Request, depot: &Depot) -> Option<Self::Key> {
@@ -151,9 +160,9 @@ where
 #[derive(Debug)]
 pub struct RemoteIpIssuer;
 impl RateIssuer for RemoteIpIssuer {
-    type Key = IpAddr;
+    type Key = String;
     async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
-        req.remote_addr().ip()
+        req.remote_addr().ip().map(|ip| ip.to_string())
     }
 }
 
@@ -179,21 +188,23 @@ pub trait RateStore: Send + Sync + 'static {
     /// Error type for RateStore.
     type Error: StdError;
     /// Key
-    type Key: Hash + Eq + Send + Clone + 'static;
+    type Key: Hash + Eq + Send + Clone + 'static + AsRef<str>;
     /// Saved guard.
     type Guard;
     /// Get the guard from the store.
     fn load_guard<Q>(
         &self,
+        depot: &Depot,
         key: &Q,
         refer: &Self::Guard,
     ) -> impl Future<Output = Result<Self::Guard, Self::Error>> + Send
     where
         Self::Key: Borrow<Q>,
-        Q: Hash + Eq + Sync;
+        Q: Hash + Eq + Sync + AsRef<str>;
     /// Save the guard from the store.
     fn save_guard(
         &self,
+        depot: &Depot,
         key: Self::Key,
         guard: Self::Guard,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
@@ -262,7 +273,7 @@ impl<G: RateGuard, S: RateStore, I: RateIssuer, P: QuotaGetter<I::Key>> RateLimi
 #[async_trait]
 impl<G, S, I, P> Handler for RateLimiter<G, S, I, P>
 where
-    G: RateGuard<Quota = P::Quota>,
+    G: RateGuard<Quota = P::Quota> + Serialize + DeserializeOwned,
     S: RateStore<Key = I::Key, Guard = G>,
     P: QuotaGetter<I::Key>,
     I: RateIssuer,
@@ -291,7 +302,7 @@ where
                 return;
             }
         };
-        let mut guard = match self.store.load_guard(&key, &self.guard).await {
+        let mut guard = match self.store.load_guard(depot, &key, &self.guard).await {
             Ok(guard) => guard,
             Err(e) => {
                 tracing::error!(error = ?e, "RateLimiter error: {}", e);
@@ -323,12 +334,13 @@ where
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
             ctrl.skip_rest();
         }
-        if let Err(e) = self.store.save_guard(key, guard).await {
+        if let Err(e) = self.store.save_guard(depot, key, guard).await {
             tracing::error!(error = ?e, "RateLimiter save guard failed");
         }
     }
 }
 
+#[cfg(feature = "moka-store")]
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

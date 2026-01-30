@@ -13,6 +13,7 @@ members = [
     "crates/oapi",
     "crates/oapi-macros",
     "crates/proxy",
+    "crates/rate-limiter",
 ]
 resolver = "3"
 
@@ -53,7 +54,7 @@ salvo-oapi = { version = "0.89.0", path = "./crates/oapi", default-features = fa
 salvo-oapi-macros = { version = "0.89.0", path = "crates/oapi-macros", default-features = false }
 # salvo-otel = { version = "0.89.0", path = "crates/otel", default-features = false }
 salvo-proxy = { version = "0.89.0", path = "crates/proxy", default-features = false }
-# salvo-rate-limiter = { version = "0.89.0", path = "crates/rate-limiter", default-features = false }
+salvo-rate-limiter = { version = "0.89.0", path = "crates/rate-limiter", default-features = false }
 salvo-serde-util = { version = "0.89.0", path = "crates/serde-util", default-features = true }
 # salvo-serve-static = { version = "0.89.0", path = "crates/serve-static", default-features = false }
 salvo-session = { version = "0.89.0", path = "crates/session", default-features = false }
@@ -182,6 +183,7 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "stream",
 ] }
 
+futures = "0.3"
 ciborium = "0.2"
 getrandom = { version = "^0.3.4", features = [
     "wasm_js",
