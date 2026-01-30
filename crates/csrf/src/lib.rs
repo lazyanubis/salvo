@@ -17,7 +17,9 @@ use std::fmt::{self, Debug, Formatter};
 mod finder;
 
 pub use finder::{CsrfTokenFinder, FormFinder, HeaderFinder, JsonFinder};
+#[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
 use rand::Rng;
+#[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
 use rand::distr::StandardUniform;
 use salvo_core::handler::Skipper;
 use salvo_core::http::{Method, StatusCode};
@@ -191,7 +193,17 @@ pub trait CsrfCipher: Send + Sync + 'static {
 
     /// Generate a random bytes.
     fn random_bytes(&self, len: usize) -> Vec<u8> {
-        rand::rng().sample_iter(StandardUniform).take(len).collect()
+        #[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
+        {
+            rand::rng().sample_iter(StandardUniform).take(len).collect()
+        }
+        #[cfg(target_family = "wasm")] // ? unsupported on wasm, use getrandom
+        {
+            let mut bytes = vec![0; len];
+            // getrandom::getrandom(&mut bytes).unwrap();
+            getrandom::fill(&mut bytes).unwrap();
+            bytes
+        }
     }
 }
 
@@ -328,6 +340,8 @@ impl<C: CsrfCipher, S: CsrfStore> Handler for Csrf<C, S> {
     }
 }
 
+#[cfg(feature = "bcrypt-cipher")]
+#[cfg(not(target_family = "wasm"))]
 #[cfg(test)]
 mod tests {
     use salvo_core::prelude::*;
