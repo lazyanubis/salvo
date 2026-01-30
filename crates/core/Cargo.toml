@@ -20,12 +20,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 default = [
     "cookie",
     "fix-http1-request-uri",
-    "server",
-    "server-handle",
+    # "server",
+    # "server-handle",
     "http1",
-    "http2",
+    # "http2",
     "test",
-    "aws-lc-rs",
+    # "aws-lc-rs",
     "matched-path",
 ]
 full = [
@@ -33,16 +33,16 @@ full = [
     "fix-http1-request-uri",
     "server",
     "http1",
-    "http2",
-    "http2-cleartext",
-    "quinn",
-    "rustls",
-    "native-tls",
-    "openssl",
+    # "http2",
+    # "http2-cleartext",
+    # "quinn",
+    # "rustls",
+    # "native-tls",
+    # "openssl",
     "unix",
     "test",
     "anyhow",
-    "aws-lc-rs",
+    # "aws-lc-rs",
     "matched-path",
     "socket2",
 ]
@@ -63,7 +63,7 @@ unix = ["http1"]
 test = [
     "dep:brotli",
     "dep:flate2",
-    "dep:zstd",
+    # "dep:zstd",
     "dep:encoding_rs",
     "dep:serde_urlencoded",
     "dep:url",
@@ -82,15 +82,16 @@ chardetng = { workspace = true }
 content_inspector = { workspace = true }
 cookie = { workspace = true, features = [
     "percent-encode",
-    "private",
-    "signed",
+    # "private",
+    # "signed",
 ], optional = true }
 encoding_rs = { workspace = true, optional = true }
 enumflags2 = { workspace = true }
 eyre = { workspace = true, optional = true }
 form_urlencoded = { workspace = true }
 futures-channel = { workspace = true }
-futures-util = { workspace = true, features = ["io"] }
+# futures-util = { workspace = true, features = ["io"] }
+futures-util = { workspace = true, default-features = false }
 h3-datagram = { workspace = true, optional = true }
 headers = { workspace = true }
 http = { workspace = true }
@@ -109,19 +110,50 @@ parking_lot = { workspace = true }
 quinn = { workspace = true, optional = true, default-features = false, features = [
     "runtime-tokio",
 ] }
-rand = { workspace = true }
+# rand = { workspace = true }
 regex = { workspace = true }
 salvo-http3 = { workspace = true, optional = true, features = ["quinn"] }
 salvo_macros = { workspace = true }
-hyper-util = { workspace = true, features = ["tokio"] }
+# hyper-util = { workspace = true, features = ["tokio"] }
+hyper-util = { workspace = true, default-features = true, features = [] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["raw_value"] }
 serde-xml-rs = { workspace = true }
 serde_urlencoded = { workspace = true, optional = true }
 socket2 = { workspace = true, optional = true }
 sync_wrapper = { workspace = true }
-tempfile = { workspace = true }
+# tempfile = { workspace = true }
+tempfile = { workspace = true, optional = true }
 thiserror = { workspace = true }
+# tokio = { workspace = true, features = [
+#     "fs",
+#     "io-util",
+#     "macros",
+#     "net",
+#     "rt-multi-thread",
+# ] }
+tokio = { workspace = true, default-features = false }
+tokio-native-tls = { workspace = true, optional = true }
+tokio-openssl = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true, features = ["logging"] }
+# tokio-util = { workspace = true, features = ["io"] }
+tokio-util = { workspace = true, default-features = false, optional = true }
+tracing = { workspace = true }
+url = { workspace = true, optional = true }
+brotli = { workspace = true, optional = true, features = ["default"] }
+flate2 = { workspace = true, optional = true, features = ["default"] }
+# zstd = { workspace = true, optional = true, features = ["default"] }
+zstd = { workspace = true, optional = true, default-features = false, features = [
+    "wasm",
+] }
+
+getrandom = { version = "^0.3.4", features = [
+    "wasm_js",
+] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
+worker = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["fs", "user"] }
 tokio = { workspace = true, features = [
     "fs",
     "io-util",
@@ -129,19 +161,14 @@ tokio = { workspace = true, features = [
     "net",
     "rt-multi-thread",
 ] }
-tokio-native-tls = { workspace = true, optional = true }
-tokio-openssl = { workspace = true, optional = true }
-tokio-rustls = { workspace = true, optional = true, features = ["logging"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+hyper-util = { workspace = true, features = ["tokio"] }
 tokio-util = { workspace = true, features = ["io"] }
-tracing = { workspace = true }
-url = { workspace = true, optional = true }
-
-brotli = { workspace = true, optional = true, features = ["default"] }
-flate2 = { workspace = true, optional = true, features = ["default"] }
-zstd = { workspace = true, optional = true, features = ["default"] }
-
-[target.'cfg(unix)'.dependencies]
-nix = { workspace = true, features = ["fs", "user"] }
+zstd = { workspace = true, features = ["default"] }
+rand = { workspace = true }
+tempfile = { workspace = true }
+socket2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 fastrand = { workspace = true }
@@ -149,3 +176,13 @@ rustls = { workspace = true, features = ["aws-lc-rs"] }
 
 [lints]
 workspace = true
+
+[package.metadata.release]
+release = false
+
+# https://github.com/rustwasm/wasm-pack/issues/1247
+# [package.metadata.wasm-pack.profile.release]
+# wasm-opt = false
+
+# [lib]
+# crate-type = ["cdylib"]

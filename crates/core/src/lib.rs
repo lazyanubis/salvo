@@ -27,7 +27,10 @@
 
 /// Re-export `async_trait`.
 pub use async_trait::async_trait;
+#[cfg(target_arch = "wasm32")]
+pub use salvo_macros as macros;
 pub use salvo_macros::handler;
+#[cfg(not(target_arch = "wasm32"))] // ? unsupported hyper deps
 pub use {hyper, salvo_macros as macros};
 // https://github.com/bkchr/proc-macro-crate/issues/10
 extern crate self as salvo_core;
@@ -42,12 +45,15 @@ pub mod conn;
 mod depot;
 mod error;
 pub mod extract;
+#[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
 pub mod fs;
+#[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
 pub mod fuse;
 pub mod handler;
 pub mod http;
 pub mod proto;
 pub mod routing;
+#[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
 pub mod rt;
 #[doc(hidden)]
 pub mod serde;
@@ -67,6 +73,7 @@ cfg_feature! {
     pub use proto::webtransport;
 }
 
+#[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
 pub use self::conn::Listener;
 pub use self::depot::Depot;
 pub use self::error::{BoxedError, Error};
@@ -102,10 +109,12 @@ pub mod prelude {
         #![feature ="quinn"]
         pub use crate::conn::QuinnListener;
     }
-    cfg_feature! {
-        #![unix]
-        pub use crate::conn::UnixListener;
-    }
+    // ? needless for wasm32
+    // cfg_feature! {
+    //     #![unix]
+    //     pub use crate::conn::UnixListener;
+    // }
+    #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
     pub use crate::conn::{JoinedListener, Listener, TcpListener};
     pub use crate::handler::{self, Handler};
     pub use crate::routing::{FlowCtrl, Router};

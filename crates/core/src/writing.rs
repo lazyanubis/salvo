@@ -2,6 +2,7 @@
 
 mod json;
 mod redirect;
+#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
 mod seek;
 mod text;
 
@@ -9,6 +10,7 @@ use http::header::{AsHeaderName, IntoHeaderName};
 use http::{HeaderMap, StatusCode};
 pub use json::Json;
 pub use redirect::Redirect;
+#[cfg(not(target_arch = "wasm32"))] // ? tokio::io
 pub use seek::ReadSeeker;
 pub use text::Text;
 

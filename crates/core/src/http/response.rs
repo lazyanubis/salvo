@@ -1,6 +1,7 @@
 //! HTTP response.
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Display, Formatter};
+#[cfg(not(target_arch = "wasm32"))] // ? unused on wasm32
 use std::path::PathBuf;
 
 use bytes::Bytes;
@@ -13,10 +14,15 @@ pub use http::response::Parts;
 use http::version::Version;
 use mime::Mime;
 
+#[cfg(not(target_arch = "wasm32"))] // ? tokio::fs
 use crate::fs::NamedFile;
+#[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
 use crate::fuse::TransProto;
+#[cfg(target_arch = "wasm32")] // ? unused on wasm32
+use crate::http::StatusCode;
 pub use crate::http::body::{BodySender, BytesFrame, ResBody};
-use crate::http::{StatusCode, StatusError};
+#[cfg(not(target_arch = "wasm32"))] // ? unused on wasm32
+use crate::http::{StatusCode, StatusError}; // ? unused on wasm32
 use crate::{BoxedError, Error, Scribe};
 
 /// Represents an HTTP response.
@@ -169,6 +175,7 @@ impl Response {
     pub fn version_mut(&mut self) -> &mut Version {
         &mut self.version
     }
+    #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions -> fuse::TransProto
     #[doc(hidden)]
     pub fn trans_proto(&self) -> TransProto {
         if self.version == Version::HTTP_3 {
@@ -409,6 +416,7 @@ impl Response {
     ///
     /// If you want more settings, you can use `NamedFile::builder` to create a new
     /// [`NamedFileBuilder`](crate::fs::NamedFileBuilder).
+    #[cfg(not(target_arch = "wasm32"))] // ? tokio::fs
     pub async fn send_file<P>(&mut self, path: P, req_headers: &HeaderMap)
     where
         P: Into<PathBuf> + Send,

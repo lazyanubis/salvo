@@ -20,6 +20,7 @@ use serde::de::Deserialize;
 
 use crate::conn::SocketAddr;
 use crate::extract::{Extractible, Metadata};
+#[cfg(not(target_arch = "wasm32"))] // ? fuse
 use crate::fuse::TransProto;
 use crate::http::body::ReqBody;
 use crate::http::form::{FilePart, FormData};
@@ -198,6 +199,7 @@ impl Request {
             matched_path: Default::default(),
         }
     }
+    #[cfg(not(target_arch = "wasm32"))] // ? fuse
     #[doc(hidden)]
     pub fn trans_proto(&self) -> TransProto {
         if self.version == Version::HTTP_3 {

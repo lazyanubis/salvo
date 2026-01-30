@@ -1,6 +1,6 @@
 [workspace]
 # members = ["crates/*", "salvo-worker"]
-members = ["crates/serde-util", "crates/macros"]
+members = ["crates/serde-util", "crates/macros", "crates/core"]
 resolver = "3"
 
 [workspace.package]
@@ -26,7 +26,7 @@ categories = [
 
 [workspace.dependencies]
 salvo_macros = { version = "0.89.0", path = "crates/macros", default-features = false }
-# salvo_core = { version = "0.89.0", path = "crates/core", default-features = false }
+salvo_core = { version = "0.89.0", path = "crates/core", default-features = false }
 # salvo_extra = { version = "0.89.0", path = "crates/extra", default-features = false }
 # salvo-acme = { version = "0.89.0", path = "crates/acme", default-features = false }
 # salvo-compression = { version = "0.89.0", path = "crates/compression", default-features = false }
@@ -34,7 +34,7 @@ salvo_macros = { version = "0.89.0", path = "crates/macros", default-features = 
 # salvo-cors = { version = "0.89.0", path = "crates/cors", default-features = false }
 # salvo-csrf = { version = "0.89.0", path = "crates/csrf", default-features = false }
 # salvo-flash = { version = "0.89.0", path = "crates/flash", default-features = false }
-# salvo-http3 = { version = "0.7.0", default-features = false }
+salvo-http3 = { version = "0.7.0", default-features = false }
 # salvo-jwt-auth = { version = "0.89.0", path = "crates/jwt-auth", default-features = false }
 # salvo-oapi = { version = "0.89.0", path = "./crates/oapi", default-features = false }
 # salvo-oapi-macros = { version = "0.89.0", path = "crates/oapi-macros", default-features = false }
@@ -170,7 +170,6 @@ reqwest = { version = "0.12.24", default-features = false, features = [
     "multipart",
     "stream",
 ] }
-
 
 ciborium = "0.2"
 getrandom = { version = "^0.3.4", features = [

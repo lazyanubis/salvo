@@ -8,6 +8,7 @@ use futures_util::stream::Stream;
 use hyper::body::{Body, Frame, Incoming, SizeHint};
 
 use crate::BoxedError;
+#[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
 use crate::fuse::{ArcFusewire, FuseEvent};
 
 pub(crate) type BoxedBody =
@@ -28,6 +29,7 @@ pub enum ReqBody {
         /// Inner body.
         inner: Incoming,
         /// Fusewire.
+        #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
         fusewire: Option<ArcFusewire>,
     },
     /// Boxed body.
@@ -35,10 +37,12 @@ pub enum ReqBody {
         /// Inner body.
         inner: BoxedBody,
         /// Fusewire.
+        #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
         fusewire: Option<ArcFusewire>,
     },
 }
 impl ReqBody {
+    #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
     #[doc(hidden)]
     pub fn set_fusewire(&mut self, value: Option<ArcFusewire>) {
         match self {
@@ -83,10 +87,15 @@ impl Body for ReqBody {
 
     fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> PollFrame {
         #[inline]
-        fn through_fusewire(poll: PollFrame, fusewire: Option<&ArcFusewire>) -> PollFrame {
+        fn through_fusewire(
+            poll: PollFrame,
+            #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+            fusewire: &Option<ArcFusewire>,
+        ) -> PollFrame {
             match poll {
                 Poll::Ready(None) => Poll::Ready(None),
                 Poll::Ready(Some(Ok(data))) => {
+                    #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
                     if let Some(fusewire) = fusewire {
                         fusewire.event(FuseEvent::GainFrame);
                     }
@@ -94,6 +103,7 @@ impl Body for ReqBody {
                 }
                 Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
                 Poll::Pending => {
+                    #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
                     if let Some(fusewire) = fusewire {
                         fusewire.event(FuseEvent::WaitFrame);
                     }
@@ -111,13 +121,29 @@ impl Body for ReqBody {
                     Poll::Ready(Some(Ok(Frame::data(bytes))))
                 }
             }
-            Self::Hyper { inner, fusewire } => {
+            Self::Hyper {
+                inner,
+                #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+                fusewire,
+            } => {
                 let poll = Pin::new(inner).poll_frame(cx).map_err(IoError::other);
-                through_fusewire(poll, fusewire.as_ref())
+                through_fusewire(
+                    poll,
+                    #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+                    fusewire,
+                )
             }
-            Self::Boxed { inner, fusewire } => {
+            Self::Boxed {
+                inner,
+                #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+                fusewire,
+            } => {
                 let poll = Pin::new(inner).poll_frame(cx).map_err(IoError::other);
-                through_fusewire(poll, fusewire.as_ref())
+                through_fusewire(
+                    poll,
+                    #[cfg(not(target_arch = "wasm32"))] // ? unsupported tokio functions
+                    fusewire,
+                )
             }
         }
     }
@@ -162,6 +188,7 @@ impl From<Incoming> for ReqBody {
     fn from(inner: Incoming) -> Self {
         Self::Hyper {
             inner,
+            #[cfg(not(target_arch = "wasm32"))]
             fusewire: None,
         }
     }
