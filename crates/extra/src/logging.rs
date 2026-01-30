@@ -21,6 +21,7 @@
 //!     Server::new(acceptor).serve(service).await;
 //! }
 //! ```
+#[cfg(not(target_family = "wasm"))] // ? unused on wasm
 use std::time::Instant;
 
 use tracing::{Instrument, Level};
@@ -53,7 +54,7 @@ impl Logger {
     ///
     /// **Note**: If you have handled the error before logging and the body is not [`ResBody::Error`],
     /// the error information cannot be recorded.
-     #[must_use]
+    #[must_use]
     pub fn log_status_error(mut self, log_status_error: bool) -> Self {
         self.log_status_error = log_status_error;
         self
@@ -79,9 +80,21 @@ impl Handler for Logger {
         );
 
         async move {
-            let now = Instant::now();
-            ctrl.call_next(req, depot, res).await;
-            let duration = now.elapsed();
+            #[cfg(not(target_family = "wasm"))]
+            let duration = {
+                let now = Instant::now();
+                ctrl.call_next(req, depot, res).await;
+                let duration = now.elapsed();
+                duration
+            };
+
+            #[cfg(target_family = "wasm")]
+            let duration = {
+                let now = worker::js_sys::Date::now();
+                ctrl.call_next(req, depot, res).await;
+                let end = worker::js_sys::Date::now();
+                std::time::Duration::from_millis((end - now) as u64)
+            };
 
             let status = res.status_code.unwrap_or(match &res.body {
                 ResBody::None => StatusCode::NOT_FOUND,

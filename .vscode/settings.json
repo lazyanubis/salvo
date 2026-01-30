@@ -51,6 +51,7 @@
         "redoc",
         "repr",
         "reqwest",
+        "rkyv",
         "rngs",
         "rsplit",
         "rustdoc",

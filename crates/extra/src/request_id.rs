@@ -132,7 +132,20 @@ impl UlidGenerator {
 }
 impl IdGenerator for UlidGenerator {
     fn generate(&self, _req: &mut Request, _depot: &mut Depot) -> String {
-        Ulid::new().to_string()
+        #[cfg(not(target_family = "wasm"))] // ? not os env
+        let id = Ulid::new().to_string();
+        #[cfg(target_family = "wasm")] // ? not os env
+        let id = {
+            fn get_random_u128() -> Result<u128, getrandom::Error> {
+                let mut buf = [0u8; 16];
+                getrandom::fill(&mut buf)?;
+                Ok(u128::from_ne_bytes(buf))
+            }
+            let now = worker::js_sys::Date::now() as u64;
+            let random = get_random_u128().unwrap_or_else(|_| now as u128 * now as u128);
+            Ulid::from_parts(now, random).to_string()
+        };
+        id
     }
 }
 
