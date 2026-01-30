@@ -19,15 +19,26 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["moka-store"]
+default = ["worker-store"]
 full = ["moka-store"]
 moka-store = ["dep:moka"]
+worker-store = ["dep:worker"]
 
 [dependencies]
 bytes = { workspace = true }
 moka = { workspace = true, optional = true, features = ["future"] }
 salvo_core = { workspace = true, features = ["http1"] }
 tracing = { workspace = true }
+
+time = { workspace = true }
+tokio = { workspace = true, default-features = false }
+sha2 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+ciborium = { workspace = true }
+worker = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 
 [dev-dependencies]
 salvo_core = { workspace = true, features = ["test"] }
@@ -36,3 +47,13 @@ time = { workspace = true }
 
 [lints]
 workspace = true
+
+[package.metadata.release]
+release = false
+
+# https://github.com/rustwasm/wasm-pack/issues/1247
+# [package.metadata.wasm-pack.profile.release]
+# wasm-opt = false
+
+# [lib]
+# crate-type = ["cdylib"]

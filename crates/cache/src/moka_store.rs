@@ -129,12 +129,12 @@ where
 
 impl<K> CacheStore for MokaStore<K>
 where
-    K: Hash + Eq + Send + Sync + Clone + 'static,
+    K: Hash + Eq + Send + Sync + Clone + 'static + AsRef<str>,
 {
     type Error = Infallible;
     type Key = K;
 
-    async fn load_entry<Q>(&self, key: &Q) -> Option<CachedEntry>
+    async fn load_entry<Q>(&self, _depot: &Depot, key: &Q) -> Option<CachedEntry>
     where
         Self::Key: Borrow<Q>,
         Q: Hash + Eq + Sync,
@@ -142,7 +142,12 @@ where
         self.inner.get(key).await
     }
 
-    async fn save_entry(&self, key: Self::Key, entry: CachedEntry) -> Result<(), Self::Error> {
+    async fn save_entry(
+        &self,
+        _depot: &Depot,
+        key: Self::Key,
+        entry: CachedEntry,
+    ) -> Result<(), Self::Error> {
         self.inner.insert(key, entry).await;
         Ok(())
     }

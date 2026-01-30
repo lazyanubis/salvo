@@ -103,10 +103,17 @@ cfg_feature! {
     pub use moka_store::{MokaStore};
 }
 
+cfg_feature! {
+    #![feature = "worker-store"]
+
+    pub mod worker_store;
+    pub use worker_store::{WorkerStore};
+}
+
 /// Issuer
 pub trait CacheIssuer: Send + Sync + 'static {
     /// The key is used to identify the rate limit.
-    type Key: Hash + Eq + Send + Sync + 'static;
+    type Key: Hash + Eq + Send + Sync + 'static + AsRef<str>;
     /// Issue a new key for the request. If it returns `None`, the request will not be cached.
     fn issue(
         &self,
@@ -117,7 +124,7 @@ pub trait CacheIssuer: Send + Sync + 'static {
 impl<F, K> CacheIssuer for F
 where
     F: Fn(&mut Request, &Depot) -> Option<K> + Send + Sync + 'static,
-    K: Hash + Eq + Send + Sync + 'static,
+    K: Hash + Eq + Send + Sync + 'static + AsRef<str>,
 {
     type Key = K;
     async fn issue(&self, req: &mut Request, depot: &Depot) -> Option<Self::Key> {
@@ -222,13 +229,18 @@ pub trait CacheStore: Send + Sync + 'static {
     /// Key
     type Key: Hash + Eq + Send + Clone + 'static;
     /// Get the cache item from the store.
-    fn load_entry<Q>(&self, key: &Q) -> impl Future<Output = Option<CachedEntry>> + Send
+    fn load_entry<Q>(
+        &self,
+        depot: &Depot,
+        key: &Q,
+    ) -> impl Future<Output = Option<CachedEntry>> + Send
     where
         Self::Key: Borrow<Q>,
-        Q: Hash + Eq + Sync;
+        Q: Hash + Eq + Sync + AsRef<str>;
     /// Save the cache item to the store.
     fn save_entry(
         &self,
+        depot: &Depot,
         key: Self::Key,
         data: CachedEntry,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
@@ -390,7 +402,7 @@ where
         let Some(key) = self.issuer.issue(req, depot).await else {
             return;
         };
-        let Some(cache) = self.store.load_entry(&key).await else {
+        let Some(cache) = self.store.load_entry(depot, &key).await else {
             ctrl.call_next(req, depot, res).await;
             if !res.body.is_stream() && !res.body.is_error() {
                 let headers = res.headers().clone();
@@ -398,7 +410,7 @@ where
                 match body {
                     Ok(body) => {
                         let cached_data = CachedEntry::new(res.status_code, headers, body);
-                        if let Err(e) = self.store.save_entry(key, cached_data).await {
+                        if let Err(e) = self.store.save_entry(depot, key, cached_data).await {
                             tracing::error!(error = ?e, "cache failed");
                         }
                     }
@@ -421,6 +433,8 @@ where
     }
 }
 
+#[cfg(feature = "moka-store")]
+#[cfg(not(target_family = "wasm32"))]
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;

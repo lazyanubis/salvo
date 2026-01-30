@@ -1,6 +1,12 @@
 [workspace]
 # members = ["crates/*", "salvo-worker"]
-members = ["crates/serde-util", "crates/macros", "crates/core"]
+members = [
+    "crates/serde-util",
+    "crates/macros",
+    "crates/core",
+    "crates/extra",
+    "crates/cache",
+]
 resolver = "3"
 
 [workspace.package]
@@ -27,10 +33,10 @@ categories = [
 [workspace.dependencies]
 salvo_macros = { version = "0.89.0", path = "crates/macros", default-features = false }
 salvo_core = { version = "0.89.0", path = "crates/core", default-features = false }
-# salvo_extra = { version = "0.89.0", path = "crates/extra", default-features = false }
+salvo_extra = { version = "0.89.0", path = "crates/extra", default-features = false }
 # salvo-acme = { version = "0.89.0", path = "crates/acme", default-features = false }
 # salvo-compression = { version = "0.89.0", path = "crates/compression", default-features = false }
-# salvo-cache = { version = "0.89.0", path = "crates/cache", default-features = false }
+salvo-cache = { version = "0.89.0", path = "crates/cache", default-features = false }
 # salvo-cors = { version = "0.89.0", path = "crates/cors", default-features = false }
 # salvo-csrf = { version = "0.89.0", path = "crates/csrf", default-features = false }
 # salvo-flash = { version = "0.89.0", path = "crates/flash", default-features = false }
