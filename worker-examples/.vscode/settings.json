@@ -1,0 +1,21 @@
+{
+    "cSpell.words": [
+        "bindgen",
+        "cdylib",
+        "chacha20poly1305",
+        "chrono",
+        "clippy",
+        "codegen",
+        "getrandom",
+        "hmac",
+        "hyperdrive",
+        "oapi",
+        "rapidoc",
+        "redoc",
+        "reqwest",
+        "rustdoc",
+        "rustflags",
+        "serde",
+        "unshift"
+    ]
+}

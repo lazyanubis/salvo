@@ -105,6 +105,13 @@ impl Handler for Timeout {
     }
 }
 
+/// sleep
+#[worker::send]
+pub async fn sleep(value: Duration) {
+    let delay: worker::Delay = value.into();
+    delay.await;
+}
+
 #[cfg(test)]
 mod tests {
     use salvo_core::prelude::*;

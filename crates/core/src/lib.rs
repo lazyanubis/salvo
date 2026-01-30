@@ -88,6 +88,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// A list of things that automatically imports into application use salvo_core.
 pub mod prelude {
+    pub use super::depot::type_key;
     pub use async_trait::async_trait;
     pub use salvo_macros::{Extractible, handler};
 

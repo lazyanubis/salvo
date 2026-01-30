@@ -69,7 +69,7 @@ full = [
 ]
 
 [dependencies]
-salvo = { path = "../crates/salvo", features = ["full"] }
+# salvo = { path = "../crates/salvo", features = ["full"] }
 salvo_core = { workspace = true, features = ["default"] }
 salvo_extra = { workspace = true, default-features = false, optional = true, features = [
     "affix-state",
