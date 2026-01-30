@@ -24,9 +24,26 @@ cookie = { workspace = true, features = ["percent-encode", "signed"] }
 salvo_core = { workspace = true, features = ["cookie"] }
 tracing = { workspace = true }
 
+getrandom_v2 = { package = "getrandom", version = "0.2.17", features = ["js"] }
+getrandom = { workspace = true, features = [
+    "wasm_js",
+] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
+time = { workspace = true }
+worker = { workspace = true }
+
 [dev-dependencies]
 salvo_core = { workspace = true, features = ["test"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
+
+[package.metadata.release]
+release = false
+
+# https://github.com/rustwasm/wasm-pack/issues/1247
+# [package.metadata.wasm-pack.profile.release]
+# wasm-opt = false
+
+# [lib]
+# crate-type = ["cdylib"]

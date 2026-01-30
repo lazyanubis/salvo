@@ -7,6 +7,7 @@ members = [
     "crates/extra",
     "crates/cache",
     "crates/cors",
+    "crates/session",
 ]
 resolver = "3"
 
@@ -50,7 +51,7 @@ salvo-http3 = { version = "0.7.0", default-features = false }
 # salvo-rate-limiter = { version = "0.89.0", path = "crates/rate-limiter", default-features = false }
 salvo-serde-util = { version = "0.89.0", path = "crates/serde-util", default-features = true }
 # salvo-serve-static = { version = "0.89.0", path = "crates/serve-static", default-features = false }
-# salvo-session = { version = "0.89.0", path = "crates/session", default-features = false }
+salvo-session = { version = "0.89.0", path = "crates/session", default-features = false }
 # salvo-craft = { version = "0.89.0", path = "crates/craft", default-features = false }
 # salvo-craft-macros = { version = "0.89.0", path = "crates/craft-macros", default-features = false }
 # salvo-tus = { version = "0.89.0", path = "crates/tus", default-features = false }
@@ -183,7 +184,6 @@ getrandom = { version = "^0.3.4", features = [
     "wasm_js",
 ] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
 worker = { version = "0.7.4" }
-
 
 [profile.release]
 lto = true # 通过对整个程序进行分析，并以增加链接时间为代价，LTO 可以生成更加优化的代码。

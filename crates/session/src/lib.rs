@@ -423,7 +423,15 @@ where
             .build();
 
         if let Some(ttl) = self.session_ttl {
+            #[cfg(not(target_family = "wasm"))] // ? no os
             cookie.set_expires(Some((std::time::SystemTime::now() + ttl).into()));
+            #[cfg(target_family = "wasm")] // ? no os
+            {
+                let now = worker::js_sys::Date::now();
+                let now = (now / 1000.0) as i64 + ttl.as_secs() as i64;
+                let date_time = time::OffsetDateTime::from_unix_timestamp(now).unwrap();
+                cookie.set_expires(cookie::Expiration::DateTime(date_time));
+            }
         }
 
         if let Some(cookie_domain) = self.cookie_domain.clone() {
