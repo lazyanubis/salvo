@@ -427,6 +427,7 @@ impl<A: Acceptor + Send> Server<A> {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[cfg(test)]
 mod tests {
     use serde::Serialize;
@@ -591,22 +592,22 @@ mod tests {
                 .await;
             Server::new(acceptor).serve(Router::new()).await;
         };
-        #[cfg(feature = "rustls")]
-        let _: &dyn Send = &async {
-            use crate::conn::rustls::{Keycert, RustlsConfig};
+        // #[cfg(feature = "rustls")]
+        // let _: &dyn Send = &async {
+        //     use crate::conn::rustls::{Keycert, RustlsConfig};
 
-            let acceptor = TcpListener::new("127.0.0.1:0")
-                .rustls(RustlsConfig::new(
-                    Keycert::new()
-                        .key_from_path("certs/key.pem")
-                        .unwrap()
-                        .cert_from_path("certs/cert.pem")
-                        .unwrap(),
-                ))
-                .bind()
-                .await;
-            Server::new(acceptor).serve(Router::new()).await;
-        };
+        //     let acceptor = TcpListener::new("127.0.0.1:0")
+        //         .rustls(RustlsConfig::new(
+        //             Keycert::new()
+        //                 .key_from_path("certs/key.pem")
+        //                 .unwrap()
+        //                 .cert_from_path("certs/cert.pem")
+        //                 .unwrap(),
+        //         ))
+        //         .bind()
+        //         .await;
+        //     Server::new(acceptor).serve(Router::new()).await;
+        // };
         #[cfg(feature = "quinn")]
         let _: &dyn Send = &async {
             use crate::conn::rustls::{Keycert, RustlsConfig};

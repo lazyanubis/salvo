@@ -434,7 +434,7 @@ where
 }
 
 #[cfg(feature = "moka-store")]
-#[cfg(not(target_family = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;

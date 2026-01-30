@@ -1,0 +1,128 @@
+[package]
+name = "salvo-worker"
+version = { workspace = true }
+authors = ["Anubis"]
+edition = { workspace = true }
+rust-version = { workspace = true }
+description = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+readme = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+categories = { workspace = true }
+include = ["src", "Cargo.toml", "../LICENSE", "../README.md"]
+
+[features]
+default = ["cache", "cors", "logging", "oapi"]
+
+cookie = ["salvo_core/cookie"]
+# ! 存疑，Cloudflare 里面的路由可能随时是新的，因此存在路由里面的数据可能会被重置
+affix-state = ["salvo_extra/affix-state"] # 不同路由和处理器之间共享任何类型的数据
+# ! 存疑，Cloudflare 里面的路由可能随时是新的，因此存在路由里面的数据可能会被重置
+basic-auth = ["salvo_extra/basic-auth"]           # 请求头中包含 Authorization 字段来传递用户名和密码
+cache = ["dep:salvo-cache"]
+caching-headers = ["salvo_extra/caching-headers"]
+catch-panic = ["salvo_extra/catch-panic"]
+# compression = ["salvo-compression"]
+concurrency-limiter = ["salvo_extra/concurrency-limiter"]
+cors = ["dep:salvo-cors"]
+session = ["dep:salvo-session"]
+csrf = ["dep:salvo-csrf"]
+flash = ["dep:salvo-flash"]
+# jwt-auth = ["dep:salvo-jwt-auth"]
+logging = ["salvo_extra/logging"]
+oapi = ["dep:salvo-oapi"]
+proxy = ["dep:salvo-proxy"]
+rate-limiter = ["dep:salvo-rate-limiter"]
+request-id = ["salvo_extra/request-id"]
+# serve-static = ["dep:salvo-serve-static"]
+size-limiter = ["salvo_extra/size-limiter"]
+# sse = ["salvo_extra/sse"]
+timeout = ["salvo_extra/timeout"]
+trailing-slash = ["salvo_extra/trailing-slash"]
+
+full = [
+    "cookie",
+    "affix-state",
+    "basic-auth",
+    "cache",
+    "caching-headers",
+    "catch-panic",
+    # "compression",
+    "concurrency-limiter",
+    "cors",
+    "session",
+    "csrf",
+    "flash",
+    # "jwt-auth", # ! ring error wasm
+    "logging",
+    "oapi",
+    "proxy",
+    "rate-limiter",
+    "request-id",
+    # "serve-static", # ! tokio/fs
+    "size-limiter",
+    # "sse", # ! tokio/time
+    "timeout",
+    "trailing-slash",
+]
+
+[dependencies]
+salvo = { path = "../crates/salvo", features = ["full"] }
+salvo_core = { workspace = true, features = ["default"] }
+salvo_extra = { workspace = true, default-features = false, optional = true, features = [
+    "affix-state",
+] }
+salvo-cache = { workspace = true, default-features = false, optional = true, features = [
+    # "moka-store", # moka 不支持 wasm32
+    "worker-store",
+] }
+salvo-compression = { workspace = true, default-features = false, optional = true, features = [
+    "brotli",
+    "gzip",
+    "deflate",
+] }
+salvo-cors = { workspace = true, optional = true }
+salvo-session = { workspace = true, optional = true }
+salvo-csrf = { workspace = true, optional = true, features = ["full"] }
+salvo-flash = { workspace = true, optional = true, features = ["full"] }
+salvo-jwt-auth = { workspace = true, optional = true, features = ["full"] }
+salvo-oapi = { workspace = true, optional = true, features = ["full"] }
+salvo-proxy = { workspace = true, optional = true, features = ["full"] }
+salvo-rate-limiter = { workspace = true, optional = true, features = ["full"] }
+salvo-serve-static = { workspace = true, optional = true, features = ["full"] }
+
+http = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true, default-features = false, features = [
+    "json",
+    "stream",
+    "multipart",
+] }
+
+# ! reqwest 间接引入了 getrandom 0.2.16
+getrandom_v2 = { workspace = true, features = ["js"] }
+getrandom = { workspace = true, features = [
+    "wasm_js",
+] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
+worker = { workspace = true, features = ["http"] }
+
+[lints]
+workspace = true
+
+[package.metadata.release]
+release = false
+
+# https://github.com/rustwasm/wasm-pack/issues/1247
+# [package.metadata.wasm-pack.profile.release]
+# wasm-opt = false
+
+# [lib]
+# crate-type = ["cdylib"]

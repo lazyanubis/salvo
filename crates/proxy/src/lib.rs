@@ -563,6 +563,7 @@ fn get_upgrade_type(headers: &HeaderMap) -> Option<&str> {
 // Unit tests for Proxy
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "hyper-client")]
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
     use std::str::FromStr;
 
@@ -629,6 +630,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "hyper-client")]
     #[tokio::test]
     async fn test_client_ip_forwarding() {
         let xff_header_name = HeaderName::from_static(X_FORWARDER_FOR_HEADER_NAME);

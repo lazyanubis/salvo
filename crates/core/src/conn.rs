@@ -508,7 +508,7 @@ pub trait Listener: Send {
 /// # Performance Note
 ///
 /// Using `DynStream` incurs the cost of dynamic dispatch. For performance-critical
-/// applications, prefer using concrete stream types when possible.】
+/// applications, prefer using concrete stream types when possible.
 #[cfg(not(target_family = "wasm"))] // ? tokio::io
 pub struct DynStream {
     reader: Box<dyn AsyncRead + Send + Unpin + 'static>,
