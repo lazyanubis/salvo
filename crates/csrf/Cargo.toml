@@ -59,7 +59,7 @@ salvo-session = { workspace = true, optional = true } # 也使用了 getrandom
 serde_json = { workspace = true }
 sha2 = { workspace = true, optional = true }
 
-getrandom_v2 = { package = "getrandom", version = "0.2.17", features = ["js"] }
+getrandom_v2 = { workspace = true, features = ["js"] }
 getrandom = { workspace = true, features = [
     "wasm_js",
 ] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'

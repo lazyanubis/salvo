@@ -14,6 +14,8 @@ members = [
     "crates/oapi-macros",
     "crates/proxy",
     "crates/rate-limiter",
+    "crates/compression",
+    "crates/jwt-auth",
 ]
 resolver = "3"
 
@@ -42,14 +44,14 @@ categories = [
 salvo_macros = { version = "0.89.0", path = "crates/macros", default-features = false }
 salvo_core = { version = "0.89.0", path = "crates/core", default-features = false }
 salvo_extra = { version = "0.89.0", path = "crates/extra", default-features = false }
-# salvo-acme = { version = "0.89.0", path = "crates/acme", default-features = false }
-# salvo-compression = { version = "0.89.0", path = "crates/compression", default-features = false }
+salvo-acme = { version = "0.89.0", path = "crates/acme", default-features = false }
+salvo-compression = { version = "0.89.0", path = "crates/compression", default-features = false }
 salvo-cache = { version = "0.89.0", path = "crates/cache", default-features = false }
 salvo-cors = { version = "0.89.0", path = "crates/cors", default-features = false }
 salvo-csrf = { version = "0.89.0", path = "crates/csrf", default-features = false }
 salvo-flash = { version = "0.89.0", path = "crates/flash", default-features = false }
 salvo-http3 = { version = "0.7.0", default-features = false }
-# salvo-jwt-auth = { version = "0.89.0", path = "crates/jwt-auth", default-features = false }
+salvo-jwt-auth = { version = "0.89.0", path = "crates/jwt-auth", default-features = false }
 salvo-oapi = { version = "0.89.0", path = "./crates/oapi", default-features = false }
 salvo-oapi-macros = { version = "0.89.0", path = "crates/oapi-macros", default-features = false }
 # salvo-otel = { version = "0.89.0", path = "crates/otel", default-features = false }
@@ -185,6 +187,7 @@ reqwest = { version = "0.13.1", default-features = false, features = [
 
 futures = "0.3"
 ciborium = "0.2"
+getrandom_v2 = { package = "getrandom", version = "0.2.17", features = ["js"] }
 getrandom = { version = "^0.3.4", features = [
     "wasm_js",
 ] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'

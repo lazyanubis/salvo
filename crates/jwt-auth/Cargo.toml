@@ -20,10 +20,13 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = []
-full = ["oidc", "ring"]
+full = [
+    # "oidc",
+    #  "ring"
+]
 oidc = [
     "dep:bytes",
-    "hyper-rustls",
+    # "hyper-rustls",
     "dep:hyper-util",
     "dep:http-body-util",
     "ring",
@@ -39,15 +42,15 @@ http-body-util = { workspace = true, optional = true }
 hyper-rustls = { workspace = true, optional = true, features = [
     "native-tokio",
     "http1",
-    "rustls-native-certs",
-    "tls12",
+    # "rustls-native-certs",
+    # "tls12",
     "logging",
 ] }
 hyper-util = { workspace = true, optional = true, features = [
     "client-legacy",
     "http1",
-    "http2",
-    "tokio",
+    # "http2",
+    # "tokio",
 ] }
 salvo_core = { workspace = true, features = ["cookie"] }
 serde = { workspace = true, features = ["derive"] }
@@ -55,6 +58,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+getrandom_v2 = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
 anyhow.workspace = true
@@ -68,3 +73,13 @@ time.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.release]
+release = false
+
+# https://github.com/rustwasm/wasm-pack/issues/1247
+# [package.metadata.wasm-pack.profile.release]
+# wasm-opt = false
+
+# [lib]
+# crate-type = ["cdylib"]

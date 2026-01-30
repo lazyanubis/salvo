@@ -147,9 +147,7 @@ zstd = { workspace = true, optional = true, default-features = false, features =
     "wasm",
 ] }
 
-# getrandom = { version = "^0.3.4", features = [
-#     "wasm_js",
-# ] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
+# getrandom = { workspace = true, features = ["wasm_js"] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
 worker = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

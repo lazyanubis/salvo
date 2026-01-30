@@ -24,7 +24,7 @@ cookie = { workspace = true, features = ["percent-encode", "signed"] }
 salvo_core = { workspace = true, features = ["cookie"] }
 tracing = { workspace = true }
 
-getrandom_v2 = { package = "getrandom", version = "0.2.17", features = ["js"] }
+getrandom_v2 = { workspace = true, features = ["js"] }
 getrandom = { workspace = true, features = [
     "wasm_js",
 ] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
