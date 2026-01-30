@@ -1,9 +1,12 @@
+#[cfg(not(target_family = "wasm"))] // ? unused on wasm32
 use futures_util::TryStreamExt;
 use hyper::upgrade::OnUpgrade;
 use reqwest::Client as InnerClient;
 use salvo_core::Error;
 use salvo_core::http::{ResBody, StatusCode};
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 use salvo_core::rt::tokio::TokioIo;
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 use tokio::io::copy_bidirectional;
 
 use crate::{BoxedError, Client, HyperRequest, HyperResponse, Proxy, Upstreams};
@@ -50,6 +53,7 @@ impl ReqwestClient {
 impl Client for ReqwestClient {
     type Error = salvo_core::Error;
 
+    #[cfg(not(target_family = "wasm"))] // ? tokio::io
     async fn execute(
         &self,
         proxied_request: HyperRequest,
@@ -107,6 +111,48 @@ impl Client for ReqwestClient {
         } else {
             hyper_response
                 .body(ResBody::stream(response.bytes_stream()))
+                .map_err(Error::other)?
+        };
+        *hyper_response.headers_mut() = res_headers;
+        Ok(hyper_response)
+    }
+
+    #[cfg(target_family = "wasm")] // ? tokio::io
+    #[worker::send]
+    async fn execute(
+        &self,
+        mut proxied_request: HyperRequest,
+        _request_upgraded: Option<OnUpgrade>,
+    ) -> Result<HyperResponse, Self::Error> {
+        let proxied_request = {
+            use futures::stream::TryStreamExt;
+            let body = proxied_request.body_mut();
+            let body = body.try_next().await?;
+            let body: Option<bytes::Bytes> = match body {
+                Some(body) => {
+                    let body = body.into_data().unwrap_or_default();
+                    Some(body.into())
+                }
+                None => None,
+            };
+            proxied_request.map(|_| body.unwrap_or_default())
+        };
+
+        let response = self
+            .inner
+            .execute(proxied_request.try_into().map_err(Error::other)?)
+            .await
+            .map_err(Error::other)?;
+
+        let res_headers = response.headers().clone();
+        let hyper_response = hyper::Response::builder().status(response.status());
+
+        let mut hyper_response = if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+            hyper_response.body(ResBody::None).map_err(Error::other)?
+        } else {
+            let bytes = response.bytes().await.map_err(Error::other)?;
+            hyper_response
+                .body(ResBody::Once(bytes.into()))
                 .map_err(Error::other)?
         };
         *hyper_response.headers_mut() = res_headers;

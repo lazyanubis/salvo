@@ -20,44 +20,88 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["aws-lc-rs", "hyper-client", "unix-sock-client"]
-full = ["aws-lc-rs", "hyper-client", "reqwest-client", "unix-sock-client"]
+# default = ["aws-lc-rs", "hyper-client", "unix-sock-client"]
+default = ["reqwest-client"]
+# full = ["aws-lc-rs", "hyper-client", "reqwest-client", "unix-sock-client"]
+full = [
+    # "aws-lc-rs",
+    # "hyper-client",
+    "reqwest-client",
+    # "unix-sock-client"
+]
 aws-lc-rs = ["hyper-rustls?/aws-lc-rs", "reqwest?/rustls"]
-ring = ["hyper-rustls?/ring", "reqwest?/rustls-no-provider", "rustls", "rustls/ring"]
+ring = [
+    "hyper-rustls?/ring",
+    "reqwest?/rustls-no-provider",
+    "rustls",
+    "rustls/ring",
+]
 hyper-client = ["dep:hyper-util", "dep:hyper-rustls"]
 reqwest-client = ["dep:reqwest"]
 unix-sock-client = []
 system-proxy = ["reqwest?/system-proxy", "hyper-util?/client-proxy-system"]
 
+worker-client = []
+
 [dependencies]
 fastrand = { workspace = true }
 futures-util = { workspace = true, default-features = false }
-hyper = { workspace = true, features = ["server", "http1", "http2"] }
-hyper-rustls = { workspace = true, optional = true, features = [
-    "native-tokio",
-    "rustls-native-certs",
+hyper = { workspace = true, features = [
+    "server",
     "http1",
-    "http2",
-    "tls12",
+    # "http2"
+] }
+hyper-rustls = { workspace = true, optional = true, features = [
+    # "native-tokio",
+    # "rustls-native-certs",
+    "http1",
+    # "http2",
+    # "tls12",
     "logging",
 ] }
 hyper-util = { workspace = true, optional = true, features = [
-    "tokio",
+    # "tokio",
     "http1",
-    "http2",
+    # "http2",
     "client-legacy",
 ] }
 local-ip-address = { workspace = true }
 percent-encoding = { workspace = true }
-reqwest = { workspace = true, optional = true, features = ["charset", "http2", "stream"] }
+reqwest = { workspace = true, default-features = false, optional = true, features = [
+    "charset",
+    # "http2",
+    "stream",
+] }
 salvo_core = { workspace = true, default-features = false }
 rustls = { workspace = true, optional = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
+
+futures = { workspace = true }
+bytes = { workspace = true }
+worker = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { workspace = true, optional = true, features = [
+    "charset",
+    "http2",
+    "stream",
+] }
+
 [dev-dependencies]
 salvo_core = { workspace = true, features = ["http1", "server", "test"] }
-rustls ={ workspace = true, features = ["aws-lc-rs"]}
+rustls = { workspace = true, features = ["aws-lc-rs"] }
 
 [lints]
 workspace = true
+
+[package.metadata.release]
+release = false
+
+# https://github.com/rustwasm/wasm-pack/issues/1247
+# [package.metadata.wasm-pack.profile.release]
+# wasm-opt = false
+
+# [lib]
+# crate-type = ["cdylib"]
