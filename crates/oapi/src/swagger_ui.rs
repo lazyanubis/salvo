@@ -29,6 +29,7 @@ const INDEX_TMPL: &str = r#"
     <title>{{title}}</title>
     {{keywords}}
     {{description}}
+    {{favicon_url}}
     <link rel="stylesheet" type="text/css" href="./swagger-ui.css" />
     <style>
     html {
@@ -84,6 +85,8 @@ pub struct SwaggerUi {
     pub keywords: Option<Cow<'static, str>>,
     /// The description of the html page.
     pub description: Option<Cow<'static, str>>,
+    /// The favicon url path
+    pub favicon_url: Option<Cow<'static, str>>,
 }
 impl SwaggerUi {
     /// Create a new [`SwaggerUi`] for given path.
@@ -103,6 +106,7 @@ impl SwaggerUi {
             title: "Swagger UI".into(),
             keywords: None,
             description: None,
+            favicon_url: None,
         }
     }
 
@@ -124,6 +128,13 @@ impl SwaggerUi {
     #[must_use]
     pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Set favicon of the html page.
+    #[must_use]
+    pub fn favicon_url(mut self, favicon_url: impl Into<Cow<'static, str>>) -> Self {
+        self.favicon_url = Some(favicon_url.into());
         self
     }
 
@@ -267,7 +278,19 @@ impl Handler for SwaggerUi {
             .as_ref()
             .map(|s| format!("<meta name=\"description\" content=\"{s}\">"))
             .unwrap_or_default();
-        match serve(path, &self.title, &keywords, &description, &self.config) {
+        let favicon_url = self
+            .favicon_url
+            .as_ref()
+            .map(|s| format!("<link rel=\"icon\" href=\"{s}\" type=\"image/x-icon\">"))
+            .unwrap_or_default();
+        match serve(
+            path,
+            &self.title,
+            &keywords,
+            &description,
+            &favicon_url,
+            &self.config,
+        ) {
             Ok(Some(file)) => {
                 res.headers_mut().insert(
                     header::CONTENT_TYPE,
@@ -403,6 +426,7 @@ pub fn serve<'a>(
     title: &str,
     keywords: &str,
     description: &str,
+    favicon_url: &str,
     config: &Config<'a>,
 ) -> Result<Option<SwaggerFile<'a>>, Error> {
     let path = if path.is_empty() || path == "/" {
@@ -418,6 +442,7 @@ pub fn serve<'a>(
         let mut index = INDEX_TMPL
             .replacen("{{config}}", &config_json, 1)
             .replacen("{{description}}", description, 1)
+            .replacen("{{favicon_url}}", favicon_url, 1)
             .replacen("{{keywords}}", keywords, 1)
             .replacen("{{title}}", title, 1);
 

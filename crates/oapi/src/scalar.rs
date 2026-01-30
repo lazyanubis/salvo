@@ -16,6 +16,7 @@ const INDEX_TMPL: &str = r#"
     <title>{{title}}</title>
     {{keywords}}
     {{description}}
+    {{favicon_url}}
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
@@ -40,6 +41,8 @@ pub struct Scalar {
     pub keywords: Option<Cow<'static, str>>,
     /// The description of the html page.
     pub description: Option<Cow<'static, str>>,
+    /// The favicon url path
+    pub favicon_url: Option<Cow<'static, str>>,
     /// Custom style for the html page.
     pub style: Option<Cow<'static, str>>,
     /// Custom header for the html page.
@@ -67,6 +70,7 @@ impl Scalar {
             title: "Scalar".into(),
             keywords: None,
             description: None,
+            favicon_url: None,
             style: Some(Cow::from(DEFAULT_STYLE)),
             header: None,
             lib_url: "https://cdn.jsdelivr.net/npm/@scalar/api-reference".into(),
@@ -92,6 +96,13 @@ impl Scalar {
     #[must_use]
     pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Set favicon of the html page.
+    #[must_use]
+    pub fn favicon_url(mut self, favicon_url: impl Into<Cow<'static, str>>) -> Self {
+        self.favicon_url = Some(favicon_url.into());
         self
     }
 
@@ -125,6 +136,11 @@ impl Handler for Scalar {
             .as_ref()
             .map(|s| format!("<meta name=\"description\" content=\"{s}\">"))
             .unwrap_or_default();
+        let favicon_url = self
+            .favicon_url
+            .as_ref()
+            .map(|s| format!("<link rel=\"icon\" href=\"{s}\" type=\"image/x-icon\">"))
+            .unwrap_or_default();
         let style = self
             .style
             .as_ref()
@@ -136,6 +152,7 @@ impl Handler for Scalar {
             .replacen("{{header}}", self.header.as_deref().unwrap_or_default(), 1)
             .replacen("{{style}}", &style, 1)
             .replacen("{{description}}", &description, 1)
+            .replacen("{{favicon_url}}", &favicon_url, 1)
             .replacen("{{keywords}}", &keywords, 1)
             .replacen("{{title}}", &self.title, 1);
         res.render(Text::Html(html));

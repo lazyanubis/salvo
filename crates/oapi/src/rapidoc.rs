@@ -16,6 +16,7 @@ const INDEX_TMPL: &str = r#"
     <title>{{title}}</title>
     {{keywords}}
     {{description}}
+    {{favicon_url}}
     <meta charset="utf-8">
     <script type="module" src="{{lib_url}}"></script>
   </head>
@@ -35,6 +36,8 @@ pub struct RapiDoc {
     pub keywords: Option<Cow<'static, str>>,
     /// The description of the html page.
     pub description: Option<Cow<'static, str>>,
+    /// The favicon url path
+    pub favicon_url: Option<Cow<'static, str>>,
     /// The lib url path.
     pub lib_url: Cow<'static, str>,
     /// The spec url path.
@@ -58,6 +61,7 @@ impl RapiDoc {
             title: "RapiDoc".into(),
             keywords: None,
             description: None,
+            favicon_url: None,
             lib_url: "https://unpkg.com/rapidoc/dist/rapidoc-min.js".into(),
             spec_url: spec_url.into(),
         }
@@ -115,10 +119,16 @@ impl Handler for RapiDoc {
             .as_ref()
             .map(|s| format!("<meta name=\"description\" content=\"{s}\">"))
             .unwrap_or_default();
+        let favicon_url = self
+            .favicon_url
+            .as_ref()
+            .map(|s| format!("<link rel=\"icon\" href=\"{s}\" type=\"image/x-icon\">"))
+            .unwrap_or_default();
         let html = INDEX_TMPL
             .replacen("{{spec_url}}", &self.spec_url, 1)
             .replacen("{{lib_url}}", &self.lib_url, 1)
             .replacen("{{description}}", &description, 1)
+            .replacen("{{favicon_url}}", &favicon_url, 1)
             .replacen("{{keywords}}", &keywords, 1)
             .replacen("{{title}}", &self.title, 1);
         res.render(Text::Html(html));

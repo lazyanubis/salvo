@@ -15,6 +15,7 @@ const INDEX_TMPL: &str = r#"
     <title>{{title}}</title>
     {{keywords}}
     {{description}}
+    {{favicon_url}}
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
@@ -49,6 +50,8 @@ pub struct ReDoc {
     pub keywords: Option<Cow<'static, str>>,
     /// The description of the html page.
     pub description: Option<Cow<'static, str>>,
+    /// The favicon url path
+    pub favicon_url: Option<Cow<'static, str>>,
     /// The lib url path.
     pub lib_url: Cow<'static, str>,
     /// The spec url path.
@@ -73,6 +76,7 @@ impl ReDoc {
             title: "ReDoc".into(),
             keywords: None,
             description: None,
+            favicon_url: None,
             lib_url: "https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js".into(),
             spec_url: spec_url.into(),
         }
@@ -96,6 +100,13 @@ impl ReDoc {
     #[must_use]
     pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Set favicon of the html page.
+    #[must_use]
+    pub fn favicon_url(mut self, favicon_url: impl Into<Cow<'static, str>>) -> Self {
+        self.favicon_url = Some(favicon_url.into());
         self
     }
 
@@ -130,10 +141,16 @@ impl Handler for ReDoc {
             .as_ref()
             .map(|s| format!("<meta name=\"description\" content=\"{s}\">"))
             .unwrap_or_default();
+        let favicon_url = self
+            .favicon_url
+            .as_ref()
+            .map(|s| format!("<link rel=\"icon\" href=\"{s}\" type=\"image/x-icon\">"))
+            .unwrap_or_default();
         let html = INDEX_TMPL
             .replacen("{{spec_url}}", &self.spec_url, 1)
             .replacen("{{lib_url}}", &self.lib_url, 1)
             .replacen("{{description}}", &description, 1)
+            .replacen("{{favicon_url}}", &favicon_url, 1)
             .replacen("{{keywords}}", &keywords, 1)
             .replacen("{{title}}", &self.title, 1);
         res.render(Text::Html(html));

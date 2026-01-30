@@ -10,6 +10,8 @@ members = [
     "crates/session",
     "crates/csrf",
     "crates/flash",
+    "crates/oapi",
+    "crates/oapi-macros",
 ]
 resolver = "3"
 
@@ -46,8 +48,8 @@ salvo-csrf = { version = "0.89.0", path = "crates/csrf", default-features = fals
 salvo-flash = { version = "0.89.0", path = "crates/flash", default-features = false }
 salvo-http3 = { version = "0.7.0", default-features = false }
 # salvo-jwt-auth = { version = "0.89.0", path = "crates/jwt-auth", default-features = false }
-# salvo-oapi = { version = "0.89.0", path = "./crates/oapi", default-features = false }
-# salvo-oapi-macros = { version = "0.89.0", path = "crates/oapi-macros", default-features = false }
+salvo-oapi = { version = "0.89.0", path = "./crates/oapi", default-features = false }
+salvo-oapi-macros = { version = "0.89.0", path = "crates/oapi-macros", default-features = false }
 # salvo-otel = { version = "0.89.0", path = "crates/otel", default-features = false }
 # salvo-proxy = { version = "0.89.0", path = "crates/proxy", default-features = false }
 # salvo-rate-limiter = { version = "0.89.0", path = "crates/rate-limiter", default-features = false }
