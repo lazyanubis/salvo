@@ -110,6 +110,7 @@ impl CsrfStore for CookieStore {
     }
 }
 
+#[cfg(feature = "bcrypt-cipher")]
 #[cfg(test)]
 mod tests {
     use super::*;

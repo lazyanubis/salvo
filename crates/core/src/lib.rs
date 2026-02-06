@@ -27,11 +27,10 @@
 
 /// Re-export `async_trait`.
 pub use async_trait::async_trait;
-#[cfg(target_family = "wasm")]
-pub use salvo_macros as macros;
 pub use salvo_macros::handler;
-#[cfg(not(target_family = "wasm"))] // ? unsupported hyper deps
-pub use {hyper, salvo_macros as macros};
+// #[cfg(not(target_family = "wasm"))] // ? unsupported hyper deps
+// pub use {hyper, salvo_macros as macros}; // hidden on rust-analyzer
+pub use salvo_macros as macros;
 // https://github.com/bkchr/proc-macro-crate/issues/10
 extern crate self as salvo_core;
 // https://github.com/bkchr/proc-macro-crate/issues/10
@@ -53,6 +52,7 @@ pub mod handler;
 pub mod http;
 pub mod proto;
 pub mod routing;
+#[cfg(feature = "hidden-on-ra")]
 #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
 pub mod rt;
 #[doc(hidden)]

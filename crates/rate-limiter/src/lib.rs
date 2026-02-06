@@ -223,36 +223,36 @@ impl RealIpIssuer {
     }
 }
 
-impl RateIssuer for RealIpIssuer {
-    type Key = IpAddr;
+// impl RateIssuer for RealIpIssuer {
+//     type Key = IpAddr;
 
-    async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
-        // Try X-Forwarded-For header first (common with most reverse proxies)
-        if let Some(xff) = req.headers().get("x-forwarded-for") {
-            if let Ok(xff_str) = xff.to_str() {
-                // X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
-                // The first one is the original client IP
-                if let Some(first_ip) = xff_str.split(',').next() {
-                    if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
-                        return Some(ip);
-                    }
-                }
-            }
-        }
+//     async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
+//         // Try X-Forwarded-For header first (common with most reverse proxies)
+//         if let Some(xff) = req.headers().get("x-forwarded-for") {
+//             if let Ok(xff_str) = xff.to_str() {
+//                 // X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
+//                 // The first one is the original client IP
+//                 if let Some(first_ip) = xff_str.split(',').next() {
+//                     if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
+//                         return Some(ip);
+//                     }
+//                 }
+//             }
+//         }
 
-        // Try X-Real-IP header (used by nginx)
-        if let Some(real_ip) = req.headers().get("x-real-ip") {
-            if let Ok(real_ip_str) = real_ip.to_str() {
-                if let Ok(ip) = real_ip_str.trim().parse::<IpAddr>() {
-                    return Some(ip);
-                }
-            }
-        }
+//         // Try X-Real-IP header (used by nginx)
+//         if let Some(real_ip) = req.headers().get("x-real-ip") {
+//             if let Ok(real_ip_str) = real_ip.to_str() {
+//                 if let Ok(ip) = real_ip_str.trim().parse::<IpAddr>() {
+//                     return Some(ip);
+//                 }
+//             }
+//         }
 
-        // Fall back to remote address
-        req.remote_addr().ip()
-    }
-}
+//         // Fall back to remote address
+//         req.remote_addr().ip()
+//     }
+// }
 
 /// `RateGuard` is strategy to verify is the request exceeded quota
 pub trait RateGuard: Clone + Send + Sync + 'static {
