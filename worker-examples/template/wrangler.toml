@@ -8,7 +8,7 @@ main = "build/worker/shim.mjs" # The path to the entrypoint of your Worker that 
 compatibility_date = "2025-09-25" # A date in the form yyyy-mm-dd, which will be used to determine which version of the Workers runtime is used.
 # account_id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" # This is the ID of the account associated with your zone. It can also be specified through the CLOUDFLARE_ACCOUNT_ID environment variable.
 # compatibility_flags = ["nodejs_compat"] # A list of flags that enable features from upcoming features of the Workers runtime, usually used together with compatibility_date.
-workers_dev = false               # Enables use of *.workers.dev subdomain to deploy your Worker. If you have a Worker that is only for scheduled events, you can set this to false.
+# workers_dev = false               # Enables use of *.workers.dev subdomain to deploy your Worker. If you have a Worker that is only for scheduled events, you can set this to false.
 # minify = true # Minify the Worker script before uploading.
 
 # Configures a custom build step to be run by Wrangler when building your Worker.
