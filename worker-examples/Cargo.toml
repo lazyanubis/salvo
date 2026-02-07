@@ -71,4 +71,4 @@ ciborium = "0.2"
 # 网络请求
 # worker::worker_sys::web_sys 提供了发起网络请求的对象
 # https://github.com/cloudflare/workers-rs/blob/main/examples/digest/src/lib.rs
-# reqwest = { version = "0.12.9", features = ["json", "blocking", "multipart"] }
+reqwest = { version = "=0.13.1", features = ["json", "blocking", "multipart"] }
