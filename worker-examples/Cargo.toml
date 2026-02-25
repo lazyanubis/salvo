@@ -38,8 +38,8 @@ salvo-worker = { path = "../salvo-worker", features = ["full"] }
 # 如果没有 console_error_panic_hook, 只会得到类似于 RuntimeError: Unreachable executed 的提示
 console_error_panic_hook = { version = "0.1.1" }
 # 绑定 Rust 到 Cloudflare Workers 环境。用 Rust 编写 Worker!
-worker = { version = "0.7.4", features = ["http", "axum", "d1"] }
-worker-macros = { version = "0.7.4", features = ["http"] }
+worker = { version = "0.7.5", features = ["http", "axum", "d1"] }
+worker-macros = { version = "0.7.5", features = ["http"] }
 tokio = { version = "1.49", default-features = false }
 
 # axum = { version = "0.8.3", default-features = false } # web 框架
@@ -57,7 +57,7 @@ sha2 = "0.10"                                              # hash
 http = "1.2"                                               # 一个通用的HTTP类型库
 once_cell = "1.20.2"                                       # 初始化
 lazy_static = { version = "1" }                            # 懒加载
-futures = { version = "0.3.31" }                           # 异步操作
+futures = { version = "0.3.32" }                           # 异步操作
 # getrandom_v2 = { package = "getrandom", version = "0.2", features = ["js"] }
 # getrandom = { version = "0.4.1", features = ["wasm_js"] }                    # 随机数
 regex = { version = "1.12.2" } # 正则
@@ -71,4 +71,4 @@ ciborium = "0.2"
 # 网络请求
 # worker::worker_sys::web_sys 提供了发起网络请求的对象
 # https://github.com/cloudflare/workers-rs/blob/main/examples/digest/src/lib.rs
-reqwest = { version = "=0.13.1", features = ["json", "blocking", "multipart"] }
+reqwest = { version = "0.13.2", features = ["json", "blocking", "multipart"] }
