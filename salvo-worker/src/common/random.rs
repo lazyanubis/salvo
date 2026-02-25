@@ -51,6 +51,7 @@ pub fn random_f64() -> Result<f64, getrandom::Error> {
 
 /// 随机 id
 #[inline]
+#[must_use]
 pub fn is_valid_id(mut id: i64) -> Option<i64> {
     // i64 19 位数字 16位数字
     // Min = -9223372036854775808,

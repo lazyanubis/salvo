@@ -89,6 +89,7 @@ impl RapiDoc {
     }
 
     /// Set favicon of the html page.
+    #[must_use]
     pub fn favicon_url(mut self, favicon_url: impl Into<Cow<'static, str>>) -> Self {
         self.favicon_url = Some(favicon_url.into());
         self

@@ -10,14 +10,21 @@ pub struct Elapsed {}
 impl Elapsed {
     /// new
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
-        Elapsed {}
+        Self {}
     }
 }
 
 #[async_trait]
 impl Handler for Elapsed {
-    async fn handle(&self, req: &mut Request, depot: &mut Depot, res: &mut Response, ctrl: &mut FlowCtrl) {
+    async fn handle(
+        &self,
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
         let now = worker::js_sys::Date::now();
         ctrl.call_next(req, depot, res).await;
         let end = worker::js_sys::Date::now();

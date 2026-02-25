@@ -20,6 +20,7 @@ pub struct Builder {
 impl Builder {
     /// 距离插入时间
     /// ! 至少 60s
+    #[must_use]
     pub fn time_to_live(mut self, duration: Duration) -> Self {
         if duration < Duration::from_secs(60) {
             panic!("time_to_live must be greater than 60s");
@@ -29,6 +30,7 @@ impl Builder {
     }
 
     /// 构建
+    #[must_use]
     pub fn build(self) -> WorkerStore {
         WorkerStore {
             key: self.key,
@@ -44,11 +46,13 @@ pub struct WorkerStore {
 }
 impl WorkerStore {
     /// Create a new `WorkerStore`.
+    #[must_use]
     pub fn new(key: String) -> Self {
         Self { key, live: None }
     }
 
     /// Returns a [`Builder`], which can build a `WorkerStore`.
+    #[must_use]
     pub fn builder(key: String) -> Builder {
         Builder { key, live: None }
     }
@@ -86,7 +90,7 @@ impl CacheStore for WorkerStore {
     ) -> Result<(), Self::Error> {
         let env = depot
             .obtain::<worker::Env>()
-            .map_err(|_| worker::Error::Json(("obtain Env failed".to_string(), 1)))?;
+            .map_err(|_| worker::Error::Json(("obtain Env failed".to_owned(), 1)))?;
         let kv = env.kv(&self.key)?;
 
         let name = key.as_ref();
@@ -133,7 +137,7 @@ impl TryFrom<CachedEntry> for InnerCachedEntry {
                         .map_err(|err| {
                             worker::Error::Json((format!("can not get header value: {err:?}"), 1))
                         })?
-                        .to_string(),
+                        .to_owned(),
                 ))
             })
             .collect::<Result<Vec<(String, String)>, Self::Error>>()?;

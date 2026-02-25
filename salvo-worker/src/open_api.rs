@@ -33,7 +33,7 @@ fn traverse_dir(path: &Path) -> Vec<String> {
             } else if let Some(path) = path.to_str()
                 && path.ends_with(".rs")
             {
-                files.push(path.to_string());
+                files.push(path.to_owned());
             }
         }
     }
@@ -57,13 +57,13 @@ fn release_endpoint(path: &str) -> Result<(), std::io::Error> {
         if lines[i].starts_with("// #[endpoint]")
             || (lines[i].starts_with("// #[endpoint(") && lines[i].ends_with(")]"))
         {
-            lines[i] = lines[i].trim_start_matches("// ").to_string();
+            lines[i] = lines[i].trim_start_matches("// ").to_owned();
             lines[i + 1] = format!("// {}", lines[i + 1]);
             replaced = true;
         } else if lines[i].starts_with("// #[endpoint(") {
             let mut j = i;
             loop {
-                lines[j] = lines[j].trim_start_matches("// ").to_string();
+                lines[j] = lines[j].trim_start_matches("// ").to_owned();
                 if lines[j].ends_with(")]") {
                     lines[j + 1] = format!("// {}", lines[j + 1]);
                     break;
@@ -96,8 +96,10 @@ fn release_handler(path: &str) -> Result<(), std::io::Error> {
 
     let mut replaced = false;
     for i in 0..lines.len() {
-        if lines[i].starts_with("#[endpoint]") || (lines[i].starts_with("#[endpoint(") && lines[i].ends_with(")]")) {
-            lines[i + 1] = lines[i + 1].trim_start_matches("// ").to_string();
+        if lines[i].starts_with("#[endpoint]")
+            || (lines[i].starts_with("#[endpoint(") && lines[i].ends_with(")]"))
+        {
+            lines[i + 1] = lines[i + 1].trim_start_matches("// ").to_owned();
             lines[i] = format!("// {}", lines[i]);
             replaced = true;
         } else if lines[i].starts_with("#[endpoint(") {
@@ -105,7 +107,7 @@ fn release_handler(path: &str) -> Result<(), std::io::Error> {
             loop {
                 lines[j] = format!("// {}", lines[j]);
                 if lines[j].ends_with("// )]") {
-                    lines[j + 1] = lines[j + 1].trim_start_matches("// ").to_string();
+                    lines[j + 1] = lines[j + 1].trim_start_matches("// ").to_owned();
                     break;
                 }
                 j += 1;
@@ -186,8 +188,11 @@ pub fn ui_scalar(
 }
 
 /// openapi ui all
+#[must_use]
 pub fn ui_all(data: &'static str, secret: Option<String>) -> Vec<super::salvo::Router> {
-    let secret = secret.map(|secret| format!("/{secret}")).unwrap_or_default();
+    let secret = secret
+        .map(|secret| format!("/{secret}"))
+        .unwrap_or_default();
     vec![
         ui_swagger(
             data,

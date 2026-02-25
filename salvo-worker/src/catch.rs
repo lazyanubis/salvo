@@ -30,7 +30,7 @@ pub async fn bad_request(req: &mut Request, depot: &mut Depot, res: &mut Respons
 
 #[handler]
 pub async fn not_found(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    if let Some(StatusCode::NOT_FOUND) = res.status_code {
+    if res.status_code == Some(StatusCode::NOT_FOUND) {
         res.status_code(StatusCode::OK);
         let response =
             MessageResponse::<()>::failed(404, format!("{} {}", req.method(), req.uri().path()));

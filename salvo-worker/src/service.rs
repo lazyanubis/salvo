@@ -11,11 +11,13 @@ pub struct WorkerService {
 
 impl WorkerService {
     /// 新建
+    #[must_use]
     pub fn new(service: salvo_core::Service) -> Self {
         Self { service }
     }
 
     /// 路由
+    #[must_use]
     pub fn from_router(router: Arc<salvo_core::Router>) -> Self {
         Self {
             service: salvo_core::Service::new(router),
@@ -23,6 +25,7 @@ impl WorkerService {
     }
 
     /// hoop
+    #[must_use]
     pub fn hoop<H: salvo_core::Handler>(self, hoop: H) -> Self {
         Self {
             service: self.service.hoop(hoop),
@@ -31,6 +34,7 @@ impl WorkerService {
 
     /// cors
     #[cfg(feature = "cors")]
+    #[must_use]
     pub fn cors(self, cors: super::salvo::cors::CorsHandler) -> Self {
         Self {
             service: self.service.hoop(cors),
@@ -39,6 +43,7 @@ impl WorkerService {
 
     /// cors
     #[cfg(feature = "cors")]
+    #[must_use]
     pub fn catch_bad_request_and_not_found(self) -> Self {
         use salvo_core::catcher::Catcher;
 

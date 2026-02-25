@@ -16,6 +16,7 @@ pub struct PageData<T> {
 
 impl<T> PageData<T> {
     /// transform
+    #[must_use]
     pub fn into<R>(self) -> PageData<R>
     where
         R: From<T>,

@@ -41,6 +41,7 @@ pub struct Depot {
 
 /// type key
 #[inline]
+#[must_use]
 pub fn type_key<T: 'static>() -> String {
     format!("{:?}", TypeId::of::<T>())
 }

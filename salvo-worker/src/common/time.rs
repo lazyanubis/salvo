@@ -16,18 +16,21 @@ fn now() -> OffsetDateTime {
 
 /// 获取当前时间戳（毫秒）
 #[inline]
+#[must_use]
 pub fn now_ms() -> i64 {
     worker::js_sys::Date::now() as i64
 }
 
 /// 获取当前时间戳（纳秒）
 #[inline]
+#[must_use]
 pub fn now_nanos() -> i64 {
     worker::js_sys::Date::now() as i64 * 1_000_000
 }
 
 /// 格式化时间，UTC 日期时间
 #[inline]
+#[must_use]
 pub fn now_format_utc() -> String {
     let now = now();
     let date = now.date();
@@ -47,6 +50,7 @@ pub fn now_format_utc() -> String {
 
 /// 格式化时间，UTC+8 日期时间
 #[inline]
+#[must_use]
 pub fn now_format() -> String {
     #[allow(clippy::unwrap_used)] // ? SAFETY
     let offset = UtcOffset::from_hms(8, 0, 0).unwrap();
@@ -67,9 +71,13 @@ pub fn now_format() -> String {
 /// 格式化时间 上海时间
 #[allow(unused)]
 #[inline]
+#[must_use]
 pub fn format_date_time(nanos: i128) -> String {
     #[allow(clippy::unwrap_used)] // ? SAFETY
+    let offset = UtcOffset::from_hms(8, 0, 0).unwrap();
+    #[allow(clippy::unwrap_used)] // ? SAFETY
     let now = OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap();
+    let now = now.to_offset(offset);
     let date = now.date();
     let time = now.time();
     let mills = now.millisecond();

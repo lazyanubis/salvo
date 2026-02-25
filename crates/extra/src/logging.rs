@@ -84,8 +84,7 @@ impl Handler for Logger {
             let duration = {
                 let now = Instant::now();
                 ctrl.call_next(req, depot, res).await;
-                let duration = now.elapsed();
-                duration
+                now.elapsed()
             };
 
             #[cfg(target_family = "wasm")]

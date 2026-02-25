@@ -28,10 +28,11 @@ fn default_created() -> String {
 impl<T: Serialize + Send + 'static> MessageResponse<T> {
     /// 成功操作
     #[inline]
+    #[must_use]
     pub fn success() -> Self {
-        MessageResponse {
+        Self {
             code: 0,
-            message: "success".to_string(),
+            message: "success".to_owned(),
             created: now_format_utc(),
             data: None,
         }
@@ -40,9 +41,9 @@ impl<T: Serialize + Send + 'static> MessageResponse<T> {
     /// 成功带有数据
     #[inline]
     pub fn data(data: T) -> Self {
-        MessageResponse {
+        Self {
             code: 0,
-            message: "success".to_string(),
+            message: "success".to_owned(),
             created: now_format_utc(),
             data: Some(data),
         }
@@ -51,7 +52,7 @@ impl<T: Serialize + Send + 'static> MessageResponse<T> {
     /// 出现错误
     #[inline]
     pub fn failed(code: u16, message: impl Into<String>) -> Self {
-        MessageResponse {
+        Self {
             code,
             message: message.into(),
             created: now_format_utc(),
@@ -68,6 +69,7 @@ impl<T: Serialize + Send + 'static> MessageResponse<T> {
 impl MessageResponse<()> {
     /// 成功操作
     #[inline]
+    #[must_use]
     pub fn none_success() -> Self {
         Self::success()
     }
@@ -75,7 +77,7 @@ impl MessageResponse<()> {
     /// 出现错误
     #[inline]
     pub fn none_failed(code: u16, message: impl Into<String>) -> Self {
-        MessageResponse {
+        Self {
             code,
             message: message.into(),
             created: now_format_utc(),
@@ -148,10 +150,8 @@ impl<T: Serialize + Send + ToSchema + 'static> EndpointOutRegister for MessageRe
     fn register(components: &mut oapi::Components, operation: &mut oapi::Operation) {
         operation.responses.insert(
             StatusCode::OK.as_str(),
-            oapi::Response::new("请求成功").add_content(
-                "application/json",
-                MessageResponse::<T>::to_schema(components),
-            ),
+            oapi::Response::new("请求成功")
+                .add_content("application/json", Self::to_schema(components)),
         );
     }
 }
