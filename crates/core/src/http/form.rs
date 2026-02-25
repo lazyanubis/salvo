@@ -16,9 +16,9 @@ use mime::Mime;
 use multer::{Field, Multipart};
 use multimap::MultiMap;
 #[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
-use rand::TryRngCore;
+use rand::TryRng;
 #[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
-use rand::rngs::OsRng;
+use rand::rngs::SysRng;
 #[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, no os
 use tempfile::Builder;
 #[cfg(not(target_family = "wasm"))] // ? tokio::io
@@ -327,13 +327,13 @@ fn text_nonce() -> String {
         Write::write_all(&mut cursor, &secs.to_le_bytes()).expect("write_all failed");
 
         // Get the last bytes from random data
-        OsRng
+        SysRng
             .try_fill_bytes(&mut raw[12..BYTE_LEN])
-            .expect("OsRng.try_fill_bytes failed");
+            .expect("SysRng.try_fill_bytes failed");
     } else {
-        OsRng
+        SysRng
             .try_fill_bytes(&mut raw[..])
-            .expect("OsRng.try_fill_bytes failed");
+            .expect("SysRng.try_fill_bytes failed");
     }
 
     // base64 encode

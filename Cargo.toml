@@ -105,7 +105,7 @@ proc-macro2-diagnostics = { version = "0.10", default-features = true }
 proc-macro2 = "1"
 quinn = { version = "0.11", default-features = false }
 quote = "1"
-rand = "0.9"
+rand = "0.10"
 rcgen = "0.14"
 regex = "1"
 # reqwest = { version = "0.13", default-features = false }
@@ -172,7 +172,10 @@ reqwest = { version = "=0.13.1", default-features = false, features = [
 futures = "0.3"
 ciborium = "0.2"
 getrandom_v2 = { package = "getrandom", version = "0.2.17", features = ["js"] }
-getrandom = { version = "^0.3.4", features = [
+getrandom_v3 = { package = "getrandom", version = "0.3.4", features = [
+    "wasm_js",
+] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
+getrandom = { version = "^0.4.1", features = [
     "wasm_js",
 ] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
 worker = { version = "0.7.4" }

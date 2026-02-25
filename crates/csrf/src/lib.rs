@@ -18,7 +18,7 @@ mod finder;
 
 pub use finder::{CsrfTokenFinder, FormFinder, HeaderFinder, JsonFinder};
 #[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
-use rand::Rng;
+use rand::RngExt;
 #[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
 use rand::distr::StandardUniform;
 use salvo_core::handler::Skipper;
