@@ -112,7 +112,7 @@ pub mod prelude {
     }
     // ? needless for wasm32
     // cfg_feature! {
-    //     #![unix]
+    //     #![all(feature = "unix", unix)]
     //     pub use crate::conn::UnixListener;
     // }
     #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
