@@ -718,6 +718,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "hyper-client")]
     #[tokio::test]
     async fn test_build_proxied_request_unsafe_tail() {
         let mut request = Request::new();
@@ -732,6 +733,7 @@ mod tests {
         assert_eq!(req.uri().to_string(), "http://example.com/api/admin");
     }
 
+    #[cfg(feature = "hyper-client")]
     #[tokio::test]
     async fn test_build_proxied_request_normalizes_safe_tail() {
         let mut request = Request::new();
