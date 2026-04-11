@@ -8,7 +8,9 @@ pub trait DisplayOption {
 
 impl<T: Display> DisplayOption for Option<T> {
     fn display(&self) -> String {
-        self.as_ref().map(|v| v.to_string()).unwrap_or_else(|| "None".into())
+        self.as_ref()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "None".into())
     }
 }
 

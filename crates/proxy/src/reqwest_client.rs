@@ -134,7 +134,7 @@ impl Client for ReqwestClient {
             let body: Option<bytes::Bytes> = match body {
                 Some(body) => {
                     let body = body.into_data().unwrap_or_default();
-                    Some(body.into())
+                    Some(body)
                 }
                 None => None,
             };
@@ -155,7 +155,7 @@ impl Client for ReqwestClient {
         } else {
             let bytes = response.bytes().await.map_err(Error::other)?;
             hyper_response
-                .body(ResBody::Once(bytes.into()))
+                .body(ResBody::Once(bytes))
                 .map_err(Error::other)?
         };
         *hyper_response.headers_mut() = res_headers;

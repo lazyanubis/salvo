@@ -48,7 +48,13 @@ async fn inner_send_lark_notice(url: &str, text: &str) -> Result<(), LarkNoticeE
         msg: String,
     }
 
-    let json = client.post(url).json(&body).send().await?.json::<LarkResult>().await?;
+    let json = client
+        .post(url)
+        .json(&body)
+        .send()
+        .await?
+        .json::<LarkResult>()
+        .await?;
 
     if json.code != 0 {
         tracing::info!("lark notice service failed: {:?}", json);

@@ -24,6 +24,7 @@ where
     G: RateGuard,
 {
     /// Create a new `WorkerStore`.
+    #[must_use]
     pub fn new(key: String) -> Self {
         Self {
             key,
@@ -57,12 +58,13 @@ where
     async fn set(&self, depot: &Depot, key: K, guard: G) -> Result<(), worker::Error> {
         let env = depot
             .obtain::<worker::Env>()
-            .map_err(|_| worker::Error::Json(("obtain Env failed".to_string(), 1)))?;
+            .map_err(|_| worker::Error::Json(("obtain Env failed".to_owned(), 1)))?;
         let kv = env.kv(&self.key)?;
 
         let name = key.as_ref();
         let mut bytes = vec![];
-        ciborium::ser::into_writer(&guard, &mut bytes).map_err(|err| worker::Error::Json((format!("{err:?}"), 1)))?;
+        ciborium::ser::into_writer(&guard, &mut bytes)
+            .map_err(|err| worker::Error::Json((format!("{err:?}"), 1)))?;
 
         let builder = kv.put_bytes(name, &bytes).map_err(worker::Error::from)?;
 
@@ -79,7 +81,12 @@ where
     type Key = K;
     type Guard = G;
 
-    async fn load_guard<Q>(&self, depot: &Depot, key: &Q, refer: &Self::Guard) -> Result<Self::Guard, Self::Error>
+    async fn load_guard<Q>(
+        &self,
+        depot: &Depot,
+        key: &Q,
+        refer: &Self::Guard,
+    ) -> Result<Self::Guard, Self::Error>
     where
         Self::Key: Borrow<Q>,
         Q: Hash + Eq + Sync + AsRef<str>,
@@ -92,7 +99,12 @@ where
         }
     }
 
-    async fn save_guard(&self, depot: &Depot, key: Self::Key, guard: Self::Guard) -> Result<(), Self::Error> {
+    async fn save_guard(
+        &self,
+        depot: &Depot,
+        key: Self::Key,
+        guard: Self::Guard,
+    ) -> Result<(), Self::Error> {
         self.set(depot, key, guard).await
     }
 }

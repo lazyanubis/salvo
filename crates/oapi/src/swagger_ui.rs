@@ -217,6 +217,7 @@ impl SwaggerUi {
 
 #[async_trait]
 impl Handler for SwaggerUi {
+    #[rustfmt::skip]
     async fn handle(
         &self,
         req: &mut Request,
@@ -251,7 +252,6 @@ impl Handler for SwaggerUi {
             .as_ref()
             .map(|s| format!("<link rel=\"icon\" href=\"{s}\" type=\"image/x-icon\">"))
             .unwrap_or_default();
-        #[rustfmt::skip]
         match serve(path, &self.title, &keywords, &description, &favicon_url, &self.config) {
             Ok(Some(file)) => {
                 res.headers_mut().insert(
