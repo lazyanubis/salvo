@@ -535,6 +535,15 @@ pub(crate) enum Variant {
     Ulid,
     #[cfg(feature = "uuid")]
     Uuid,
+    Duration,
+    Email,
+    IdnEmail,
+    Hostname,
+    IdnHostname,
+    UriTemplate,
+    JsonPointer,
+    RelativeJsonPointer,
+    Regex,
     Custom(String),
 }
 
@@ -550,6 +559,15 @@ impl Parse for Variant {
             "Date",
             "DateTime",
             "Password",
+            "Duration",
+            "Email",
+            "IdnEmail",
+            "Hostname",
+            "IdnHostname",
+            "UriTemplate",
+            "JsonPointer",
+            "RelativeJsonPointer",
+            "Regex",
             #[cfg(feature = "uuid")]
             "Uuid",
             #[cfg(feature = "ulid")]
@@ -610,6 +628,15 @@ impl Parse for Variant {
                 "Uuid" => Ok(Self::Uuid),
                 #[cfg(feature = "ulid")]
                 "Ulid" => Ok(Self::Ulid),
+                "Duration" => Ok(Self::Duration),
+                "Email" => Ok(Self::Email),
+                "IdnEmail" => Ok(Self::IdnEmail),
+                "Hostname" => Ok(Self::Hostname),
+                "IdnHostname" => Ok(Self::IdnHostname),
+                "UriTemplate" => Ok(Self::UriTemplate),
+                "JsonPointer" => Ok(Self::JsonPointer),
+                "RelativeJsonPointer" => Ok(Self::RelativeJsonPointer),
+                "Regex" => Ok(Self::Regex),
                 _ => Err(Error::new(
                     format.span(),
                     format!("unexpected format: {name}, expected one of: {formats}"),
@@ -629,9 +656,13 @@ impl ToTokens for Variant {
         let oapi = crate::oapi_crate();
         match self {
             #[cfg(feature = "non-strict-integers")]
-            Self::Int8 => tokens.extend(quote! {#oapi::oapi::SchemaFormat::KnownFormat(utoipa::openapi::KnownFormat::Int8)}),
+            Self::Int8 => tokens.extend(
+                quote! {#oapi::oapi::SchemaFormat::KnownFormat(#oapi::oapi::KnownFormat::Int8)},
+            ),
             #[cfg(feature = "non-strict-integers")]
-            Self::Int16 => tokens.extend(quote! {#oapi::oapi::SchemaFormat::KnownFormat(utoipa::openapi::KnownFormat::Int16)}),
+            Self::Int16 => tokens.extend(
+                quote! {#oapi::oapi::SchemaFormat::KnownFormat(#oapi::oapi::KnownFormat::Int16)},
+            ),
 
             Self::Int32 => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
                 #oapi::oapi::KnownFormat::Int32
@@ -640,16 +671,20 @@ impl ToTokens for Variant {
                 #oapi::oapi::KnownFormat::Int64
             ))),
             #[cfg(feature = "non-strict-integers")]
-            Self::UInt8 => tokens.extend(quote! {#oapi::oapi::SchemaFormat::KnownFormat(utoipa::openapi::KnownFormat::UInt8)}),
+            Self::UInt8 => tokens.extend(
+                quote! {#oapi::oapi::SchemaFormat::KnownFormat(#oapi::oapi::KnownFormat::UInt8)},
+            ),
             #[cfg(feature = "non-strict-integers")]
-            Self::UInt16 => tokens.extend(quote! {#oapi::oapi::SchemaFormat::KnownFormat(utoipa::openapi::KnownFormat::UInt16)}),
+            Self::UInt16 => tokens.extend(
+                quote! {#oapi::oapi::SchemaFormat::KnownFormat(#oapi::oapi::KnownFormat::UInt16)},
+            ),
             #[cfg(feature = "non-strict-integers")]
             Self::UInt32 => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
-                utoipa::openapi::KnownFormat::UInt32
+                #oapi::oapi::KnownFormat::UInt32
             ))),
             #[cfg(feature = "non-strict-integers")]
             Self::UInt64 => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
-                utoipa::openapi::KnownFormat::UInt64
+                #oapi::oapi::KnownFormat::UInt64
             ))),
             Self::Float => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
                 #oapi::oapi::KnownFormat::Float
@@ -683,6 +718,35 @@ impl ToTokens for Variant {
             #[cfg(feature = "url")]
             Self::Url => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
                 #oapi::oapi::KnownFormat::Url
+            ))),
+            Self::Duration => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
+                #oapi::oapi::KnownFormat::Duration
+            ))),
+            Self::Email => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
+                #oapi::oapi::KnownFormat::Email
+            ))),
+            Self::IdnEmail => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
+                #oapi::oapi::KnownFormat::IdnEmail
+            ))),
+            Self::Hostname => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
+                #oapi::oapi::KnownFormat::Hostname
+            ))),
+            Self::IdnHostname => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
+                #oapi::oapi::KnownFormat::IdnHostname
+            ))),
+            Self::UriTemplate => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
+                #oapi::oapi::KnownFormat::UriTemplate
+            ))),
+            Self::JsonPointer => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
+                #oapi::oapi::KnownFormat::JsonPointer
+            ))),
+            Self::RelativeJsonPointer => {
+                tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
+                    #oapi::oapi::KnownFormat::RelativeJsonPointer
+                )))
+            }
+            Self::Regex => tokens.extend(quote!(#oapi::oapi::SchemaFormat::KnownFormat(
+                #oapi::oapi::KnownFormat::Regex
             ))),
             Self::Custom(value) => tokens.extend(quote!(#oapi::oapi::SchemaFormat::Custom(
                 String::from(#value)
@@ -990,14 +1054,14 @@ mod tests {
     #[test]
     fn test_variant_clone() {
         let original = Variant::Int32;
-        let cloned = original.clone();
+        let cloned = original;
         assert!(matches!(cloned, Variant::Int32));
     }
 
     #[test]
     fn test_variant_debug() {
         let variant = Variant::Float;
-        let debug = format!("{:?}", variant);
+        let debug = format!("{variant:?}");
         assert_eq!(debug, "Float");
     }
 
@@ -1034,7 +1098,7 @@ mod tests {
     #[test]
     fn test_schema_format_debug() {
         let format = SchemaFormat::Variant(Variant::Double);
-        let debug = format!("{:?}", format);
+        let debug = format!("{format:?}");
         assert!(debug.contains("Variant"));
         assert!(debug.contains("Double"));
     }

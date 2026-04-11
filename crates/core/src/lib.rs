@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 //! The core crate of Salvo web framework.
 //!
 //! `salvo_core` uses a set of [feature flags] to reduce the amount of compiled and
@@ -27,10 +28,10 @@
 
 /// Re-export `async_trait`.
 pub use async_trait::async_trait;
-pub use salvo_macros::handler;
 // #[cfg(not(target_family = "wasm"))] // ? unsupported hyper deps
-// pub use {hyper, salvo_macros as macros}; // hidden on rust-analyzer
+pub use hyper;
 pub use salvo_macros as macros;
+pub use salvo_macros::handler;
 // https://github.com/bkchr/proc-macro-crate/issues/10
 extern crate self as salvo_core;
 // https://github.com/bkchr/proc-macro-crate/issues/10

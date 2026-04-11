@@ -14,7 +14,7 @@ use super::{
 use crate::component::{ComponentDescription, ComponentSchemaProps};
 use crate::doc_comment::CommentAttributes;
 use crate::feature::attributes::{
-    self, Alias, Bound, Default, Name, RenameAll, Required, SkipBound,
+    self, Alias, Bound, Default, Ignore, Name, NoRecursion, RenameAll, Required, SkipBound,
 };
 use crate::feature::{
     Feature, FeaturesExt, IsSkipped, TryToTokensExt, parse_features, pop_feature,
@@ -40,6 +40,7 @@ pub(crate) struct NamedStructSchema<'a> {
     pub(crate) name: Option<Name>,
     pub(crate) aliases: Option<Punctuated<Alias, Token![,]>>,
     pub(crate) inline: Option<Inline>,
+    pub(crate) compose_context: Option<crate::component::ComposeContext>,
 }
 
 struct NamedStructFieldOptions<'a> {
@@ -47,6 +48,7 @@ struct NamedStructFieldOptions<'a> {
     rename_field_value: Option<Cow<'a, str>>,
     required: Option<Required>,
     is_option: bool,
+    ignore: Option<crate::parse_utils::LitBoolOrExprPath>,
 }
 
 impl NamedStructSchema<'_> {
@@ -69,6 +71,26 @@ impl NamedStructSchema<'_> {
             .parse_features::<NamedFieldFeatures>()?
             .into_inner();
 
+        // Propagate no_recursion from struct-level features to field-level features
+        if self
+            .features
+            .as_ref()
+            .map(|features| {
+                features
+                    .iter()
+                    .any(|f| matches!(f, Feature::NoRecursion(_)))
+            })
+            .unwrap_or(false)
+        {
+            let features_inner = field_features.get_or_insert(vec![]);
+            if !features_inner
+                .iter()
+                .any(|f| matches!(f, Feature::NoRecursion(_)))
+            {
+                features_inner.push(Feature::NoRecursion(NoRecursion));
+            }
+        }
+
         let schema_default = self
             .features
             .as_ref()
@@ -79,7 +101,7 @@ impl NamedStructSchema<'_> {
             .map(|rules| rules.is_default)
             .unwrap_or(false);
 
-        if schema_default || serde_default {
+        if (schema_default || serde_default) && !flatten {
             let features_inner = field_features.get_or_insert(vec![]);
             if !features_inner
                 .iter()
@@ -123,6 +145,10 @@ impl NamedStructSchema<'_> {
         let description = &ComponentDescription::CommentAttributes(&comments);
         let with_schema = pop_feature!(field_features => Feature::SchemaWith(_));
         let required = pop_feature_as_inner!(field_features => Feature::Required(_v));
+        let ignore = match pop_feature!(field_features => Feature::Ignore(_)) {
+            Some(Feature::Ignore(Ignore(bool_or_exp))) => Some(bool_or_exp),
+            _ => None,
+        };
         let type_tree = override_type_tree.as_ref().unwrap_or(type_tree);
         let is_option = type_tree.is_option();
 
@@ -136,6 +162,7 @@ impl NamedStructSchema<'_> {
                     description: Some(description),
                     deprecated: deprecated.as_ref(),
                     object_name: self.struct_name.as_ref(),
+                    compose_context: self.compose_context.as_ref(),
                 };
                 if flatten && type_tree.is_map() {
                     Property::FlattenedMap(FlattenedMapSchema::new(cs)?)
@@ -146,6 +173,7 @@ impl NamedStructSchema<'_> {
             rename_field_value: rename_field,
             required,
             is_option,
+            ignore,
         })
     }
 }
@@ -153,7 +181,17 @@ impl NamedStructSchema<'_> {
 impl TryToTokens for NamedStructSchema<'_> {
     fn try_to_tokens(&self, tokens: &mut TokenStream) -> DiagResult<()> {
         let oapi = crate::oapi_crate();
-        let container_rules = serde_util::parse_container(self.attributes);
+        let container_rules =
+            serde_util::parse_container(self.attributes).map_err(Diagnostic::from)?;
+        let schema_default = self
+            .features
+            .as_ref()
+            .map(|features| features.iter().any(|f| matches!(f, Feature::Default(_))))
+            .unwrap_or(false);
+        let serde_default = container_rules
+            .as_ref()
+            .map(|rules| rules.is_default)
+            .unwrap_or(false);
 
         let field_values = self
             .fields
@@ -170,7 +208,7 @@ impl TryToTokens for NamedStructSchema<'_> {
                     return Ok(None);
                 }
 
-                let field_rule = serde_util::parse_value(&field.attrs);
+                let field_rule = serde_util::parse_value(&field.attrs).map_err(Diagnostic::from)?;
 
                 if is_not_skipped(field_rule.as_ref()) && !is_flatten(field_rule.as_ref()) {
                     Ok(Some((field, field_rule)))
@@ -200,7 +238,17 @@ impl TryToTokens for NamedStructSchema<'_> {
                 rename_field_value,
                 required,
                 is_option,
+                ignore,
             } = self.field_as_schema_property(field, false, container_rules.as_ref())?;
+
+            // Handle ignore: if ignore is LitBool(true), skip this field entirely
+            match &ignore {
+                Some(crate::parse_utils::LitBoolOrExprPath::LitBool(lit)) if lit.value() => {
+                    continue;
+                }
+                _ => {}
+            }
+
             let rename_to = field_rule
                 .as_ref()
                 .and_then(|field_rule| field_rule.rename.as_deref().map(Cow::Borrowed))
@@ -218,9 +266,6 @@ impl TryToTokens for NamedStructSchema<'_> {
                 .unwrap_or(Cow::Borrowed(field_name));
 
             let property = property.try_to_token_stream()?;
-            object_tokens.extend(quote! {
-                .property(#name, #property)
-            });
 
             let component_required =
                 !is_option && crate::is_required(field_rule.as_ref(), container_rules.as_ref());
@@ -229,20 +274,50 @@ impl TryToTokens for NamedStructSchema<'_> {
                 (None, component_required) => component_required,
             };
 
+            let mut property_tokens = quote! {
+                .property(#name, #property)
+            };
+
             if required {
-                object_tokens.extend(quote! {
+                property_tokens.extend(quote! {
                     .required(#name)
                 })
+            }
+
+            match &ignore {
+                Some(crate::parse_utils::LitBoolOrExprPath::ExprPath(path)) => {
+                    // Wrap in a runtime conditional: only add the property if the function returns
+                    // false (i.e., the field is NOT ignored)
+                    // We need to switch to a block-based approach for this object
+                    object_tokens = quote! {
+                        {
+                            let __obj = #object_tokens;
+                            if !#path() {
+                                __obj #property_tokens
+                            } else {
+                                __obj
+                            }
+                        }
+                    };
+                }
+                _ => {
+                    // LitBool(false) or None: include the field normally
+                    object_tokens.extend(property_tokens);
+                }
             }
         }
 
         let flatten_fields: Vec<&Field> = self
             .fields
             .iter()
-            .filter(|field| {
-                let field_rule = serde_util::parse_value(&field.attrs);
-                is_flatten(field_rule.as_ref())
+            .map(|field| {
+                let field_rule = serde_util::parse_value(&field.attrs).map_err(Diagnostic::from)?;
+                Ok((field, field_rule))
             })
+            .collect::<DiagResult<Vec<_>>>()?
+            .into_iter()
+            .filter(|(_, field_rule)| is_flatten(field_rule.as_ref()))
+            .map(|(field, _)| field)
             .collect();
 
         let all_of = if !flatten_fields.is_empty() {
@@ -303,6 +378,102 @@ impl TryToTokens for NamedStructSchema<'_> {
             false
         };
 
+        if all_of && (schema_default || serde_default) {
+            let struct_ident = format_ident!("{}", &self.struct_name);
+            let mut default_value_tokens = TokenStream::new();
+
+            for field in self.fields {
+                let field_rule = serde_util::parse_value(&field.attrs).map_err(Diagnostic::from)?;
+                if !is_not_skipped(field_rule.as_ref()) {
+                    continue;
+                }
+
+                let field_ident = field.ident.as_ref().expect("field ident should be exists");
+                let mut field_name = field_ident.to_string();
+                if field_name.starts_with("r#") {
+                    field_name = field_name[2..].to_owned();
+                }
+
+                let NamedStructFieldOptions {
+                    rename_field_value,
+                    ignore,
+                    ..
+                } = self.field_as_schema_property(
+                    field,
+                    is_flatten(field_rule.as_ref()),
+                    container_rules.as_ref(),
+                )?;
+
+                let maybe_guard = match &ignore {
+                    Some(crate::parse_utils::LitBoolOrExprPath::LitBool(lit)) if lit.value() => {
+                        continue;
+                    }
+                    Some(crate::parse_utils::LitBoolOrExprPath::ExprPath(path)) => {
+                        Some(quote! { if !#path() })
+                    }
+                    _ => None,
+                };
+
+                if is_flatten(field_rule.as_ref()) {
+                    let insert_tokens = quote! {
+                        if let #oapi::oapi::__private::serde_json::Value::Object(__flattened) =
+                            #oapi::oapi::__private::serde_json::to_value(#struct_ident::default().#field_ident).unwrap()
+                        {
+                            __default.extend(__flattened);
+                        }
+                    };
+                    if let Some(guard_tokens) = maybe_guard {
+                        default_value_tokens.extend(quote! {
+                            #guard_tokens {
+                                #insert_tokens
+                            }
+                        });
+                    } else {
+                        default_value_tokens.extend(insert_tokens);
+                    }
+                } else {
+                    let rename_to = field_rule
+                        .as_ref()
+                        .and_then(|field_rule| field_rule.rename.as_deref().map(Cow::Borrowed))
+                        .or(rename_field_value);
+                    let rename_all = container_rules
+                        .as_ref()
+                        .and_then(|container_rule| container_rule.rename_all)
+                        .or_else(|| {
+                            self.rename_all
+                                .as_ref()
+                                .map(|rename_all| rename_all.to_rename_rule())
+                        });
+                    let name = crate::rename::<FieldRename>(&field_name, rename_to, rename_all)
+                        .unwrap_or(Cow::Borrowed(field_name.as_str()))
+                        .into_owned();
+                    let insert_tokens = quote! {
+                        __default.insert(
+                            #name.to_owned(),
+                            #oapi::oapi::__private::serde_json::to_value(#struct_ident::default().#field_ident).unwrap(),
+                        );
+                    };
+                    if let Some(guard_tokens) = maybe_guard {
+                        default_value_tokens.extend(quote! {
+                            #guard_tokens {
+                                #insert_tokens
+                            }
+                        });
+                    } else {
+                        default_value_tokens.extend(insert_tokens);
+                    }
+                }
+            }
+
+            tokens.extend(quote! {
+                .default_value({
+                    let mut __default = #oapi::oapi::__private::serde_json::Map::new();
+                    #default_value_tokens
+                    #oapi::oapi::__private::serde_json::Value::Object(__default)
+                })
+            });
+        }
+
         if !all_of
             && container_rules
                 .as_ref()
@@ -345,6 +516,7 @@ pub(super) struct UnnamedStructSchema<'a> {
     pub(super) name: Option<Name>,
     pub(super) aliases: Option<Punctuated<Alias, Comma>>,
     pub(super) inline: Option<Inline>,
+    pub(super) compose_context: Option<crate::component::ComposeContext>,
 }
 impl UnnamedStructSchema<'_> {
     pub(crate) fn pop_skip_bound(&mut self) -> Option<SkipBound> {
@@ -445,6 +617,7 @@ impl TryToTokens for UnnamedStructSchema<'_> {
                     description: description.as_ref(),
                     deprecated: deprecated.as_ref(),
                     object_name: self.struct_name.as_ref(),
+                    compose_context: self.compose_context.as_ref(),
                 })?
                 .to_token_stream(),
             );

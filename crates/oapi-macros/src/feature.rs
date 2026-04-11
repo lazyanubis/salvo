@@ -22,26 +22,55 @@ use crate::schema_type::SchemaType;
 use crate::type_tree::TypeTree;
 use crate::{DiagLevel, DiagResult, Diagnostic, IntoInner, TryToTokens, parse_utils};
 
-/// Parse `LitInt` from parse stream
+/// Parse `LitInt` from parse stream, supporting an optional leading `-` for negative values.
 fn parse_integer<T: FromStr + Display>(input: ParseStream) -> syn::Result<T>
 where
     <T as FromStr>::Err: Display,
 {
-    parse_utils::parse_next(input, || input.parse::<LitInt>()?.base10_parse())
+    parse_utils::parse_next(input, || {
+        let minus = input.parse::<Option<syn::Token![-]>>()?;
+        let lit = input.parse::<LitInt>()?;
+        if minus.is_some() {
+            let value_str = format!("-{lit}");
+            value_str
+                .parse::<T>()
+                .map_err(|e| syn::Error::new(lit.span(), e))
+        } else {
+            lit.base10_parse()
+        }
+    })
 }
 
-/// Parse any `number`. Tries to parse `LitInt` or `LitFloat` from parse stream.
+/// Parse any `number`. Tries to parse `LitInt` or `LitFloat` from parse stream,
+/// supporting an optional leading `-` for negative values.
 fn parse_number<T>(input: ParseStream) -> syn::Result<T>
 where
     T: FromStr,
     <T as FromStr>::Err: Display,
 {
     parse_utils::parse_next(input, || {
+        let minus = input.parse::<Option<syn::Token![-]>>()?;
         let lookup = input.lookahead1();
         if lookup.peek(LitInt) {
-            input.parse::<LitInt>()?.base10_parse()
+            let lit = input.parse::<LitInt>()?;
+            if minus.is_some() {
+                let value_str = format!("-{lit}");
+                value_str
+                    .parse::<T>()
+                    .map_err(|e| syn::Error::new(lit.span(), e))
+            } else {
+                lit.base10_parse()
+            }
         } else if lookup.peek(LitFloat) {
-            input.parse::<LitFloat>()?.base10_parse()
+            let lit = input.parse::<LitFloat>()?;
+            if minus.is_some() {
+                let value_str = format!("-{lit}");
+                value_str
+                    .parse::<T>()
+                    .map_err(|e| syn::Error::new(lit.span(), e))
+            } else {
+                lit.base10_parse()
+            }
         } else {
             Err(lookup.error())
         }
@@ -118,6 +147,9 @@ pub(crate) enum Feature {
     Bound(Bound),
     ContentEncoding(ContentEncoding),
     ContentMediaType(ContentMediaType),
+    Discriminator(Discriminator),
+    Ignore(Ignore),
+    NoRecursion(NoRecursion),
 }
 
 impl Feature {
@@ -252,6 +284,15 @@ impl TryToTokens for Feature {
             Self::ContentMediaType(content_media_type) => {
                 quote! { .content_media_type(#content_media_type) }
             }
+            Self::Discriminator(_) => {
+                return Err(Diagnostic::spanned(
+                    Span::call_site(),
+                    DiagLevel::Error,
+                    "Discriminator does not support `TryToTokens` directly",
+                )
+                .help("Discriminator is applied to the composite schema (OneOf/AnyOf/AllOf) during enum schema generation."));
+            }
+            Self::Ignore(_) => TokenStream::new(),
             Self::RenameAll(_) => {
                 return Err(Diagnostic::spanned(
                     Span::call_site(),
@@ -269,8 +310,8 @@ impl TryToTokens for Feature {
                     "ValueType is supposed to be used with `TypeTree` in same manner as a resolved struct/field type.",
                 ));
             }
-            Self::Inline(_) | Self::SkipBound(_) | Self::Bound(_) => {
-                // inline， skip_bound and bound feature is ignored by `TryToTokens`
+            Self::Inline(_) | Self::SkipBound(_) | Self::Bound(_) | Self::NoRecursion(_) => {
+                // inline, skip_bound, bound and no_recursion features are ignored by `TryToTokens`
                 TokenStream::new()
             }
             Self::ToParametersNames(_) => {
@@ -336,6 +377,9 @@ impl Display for Feature {
             Self::Bound(bound) => bound.fmt(f),
             Self::ContentEncoding(content_encoding) => content_encoding.fmt(f),
             Self::ContentMediaType(content_media_type) => content_media_type.fmt(f),
+            Self::Discriminator(discriminator) => discriminator.fmt(f),
+            Self::Ignore(ignore) => ignore.fmt(f),
+            Self::NoRecursion(no_recursion) => no_recursion.fmt(f),
         }
     }
 }
@@ -389,6 +433,9 @@ impl Validatable for Feature {
             Self::Bound(bound) => bound.is_validatable(),
             Self::ContentEncoding(content_encoding) => content_encoding.is_validatable(),
             Self::ContentMediaType(content_media_type) => content_media_type.is_validatable(),
+            Self::Discriminator(discriminator) => discriminator.is_validatable(),
+            Self::Ignore(ignore) => ignore.is_validatable(),
+            Self::NoRecursion(no_recursion) => no_recursion.is_validatable(),
         }
     }
 }

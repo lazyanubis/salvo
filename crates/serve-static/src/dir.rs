@@ -21,7 +21,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
 use time::macros::format_description;
-use tokio::io::AsyncReadExt;
 
 use super::join_path;
 
@@ -352,6 +351,7 @@ impl Handler for StaticDir {
             .map(|s| s.starts_with('.'))
             .unwrap_or(false);
         let mut abs_path = None;
+        let mut abs_is_file = false;
         if self.include_dot_files || !is_dot_file {
             for root in &self.roots {
                 let raw_path = join_path!(root, &rel_path);
@@ -363,29 +363,39 @@ impl Handler for StaticDir {
                 if self.exclude_filters.iter().any(|filter| filter(&raw_path)) {
                     continue;
                 }
-                let path = Path::new(&raw_path);
-                if path.is_dir() {
-                    if !req_path.ends_with('/') && !req_path.is_empty() {
-                        redirect_to_dir_url(req.uri(), res);
-                        return;
-                    }
+                let path = PathBuf::from(&raw_path);
+                // Use a single async metadata call instead of multiple blocking is_file/is_dir
+                let meta = tokio::fs::symlink_metadata(&path).await;
+                if let Ok(meta) = meta {
+                    if meta.is_dir() {
+                        if !req_path.ends_with('/') && !req_path.is_empty() {
+                            redirect_to_dir_url(req.uri(), res);
+                            return;
+                        }
 
-                    for ifile in &self.defaults {
-                        let ipath = path.join(ifile);
-                        if ipath.is_file() {
-                            abs_path = Some(ipath);
+                        for ifile in &self.defaults {
+                            let ipath = path.join(ifile);
+                            if tokio::fs::symlink_metadata(&ipath)
+                                .await
+                                .map(|m| m.is_file())
+                                .unwrap_or(false)
+                            {
+                                abs_path = Some(ipath);
+                                abs_is_file = true;
+                                break;
+                            }
+                        }
+
+                        if self.auto_list && abs_path.is_none() {
+                            abs_path = Some(path);
+                        }
+                        if abs_path.is_some() {
                             break;
                         }
+                    } else if meta.is_file() {
+                        abs_path = Some(path);
+                        abs_is_file = true;
                     }
-
-                    if self.auto_list && abs_path.is_none() {
-                        abs_path = Some(path.to_path_buf());
-                    }
-                    if abs_path.is_some() {
-                        break;
-                    }
-                } else if path.is_file() {
-                    abs_path = Some(path.to_path_buf());
                 }
             }
         }
@@ -396,9 +406,14 @@ impl Handler for StaticDir {
                 if self.exclude_filters.iter().any(|filter| filter(&raw_path)) {
                     continue;
                 }
-                let path = Path::new(&raw_path);
-                if path.is_file() {
-                    abs_path = Some(path.to_path_buf());
+                let path = PathBuf::from(&raw_path);
+                if tokio::fs::symlink_metadata(&path)
+                    .await
+                    .map(|m| m.is_file())
+                    .unwrap_or(false)
+                {
+                    abs_path = Some(path);
+                    abs_is_file = true;
                     break;
                 }
             }
@@ -409,7 +424,9 @@ impl Handler for StaticDir {
             return;
         };
 
-        if abs_path.is_file() {
+        let is_file = abs_is_file;
+
+        if is_file {
             let ext = abs_path
                 .extension()
                 .and_then(|s| s.to_str())
@@ -419,16 +436,7 @@ impl Handler for StaticDir {
                 .map(|ext| self.is_compressed_ext(ext))
                 .unwrap_or(false);
             let mut content_encoding = None;
-            let mut content_type = mime_infer::from_path(&abs_path).first();
-
-            if let Some(content_type) = &mut content_type
-                && mime::is_charset_required_mime(content_type)
-                && let Ok(file) = tokio::fs::File::open(&abs_path).await
-            {
-                let mut buffer: Vec<u8> = vec![];
-                let _ = file.take(1024).read(&mut buffer).await;
-                mime::fill_mime_charset_if_need(content_type, &buffer);
-            }
+            let content_type = mime_infer::from_path(&abs_path).first();
 
             let named_path = if !is_compressed_ext {
                 if !self.compressed_variations.is_empty() {
@@ -438,19 +446,27 @@ impl Handler for StaticDir {
                         .get(ACCEPT_ENCODING)
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or_default();
-                    let accept_algos = http::parse_accept_encoding(header)
-                        .into_iter()
-                        .filter_map(|(algo, _level)| algo.parse::<CompressionAlgo>().ok())
-                        .collect::<HashSet<_>>();
-                    for (algo, exts) in &self.compressed_variations {
-                        if accept_algos.contains(algo) {
-                            for zip_ext in exts {
-                                let mut path = abs_path.clone();
-                                path.as_mut_os_string().push(&*format!(".{zip_ext}"));
-                                if path.is_file() {
-                                    new_abs_path = Some(path);
-                                    content_encoding = Some(algo.to_string());
-                                    break;
+                    // Skip compressed variant lookup when client only accepts identity
+                    if !header.is_empty() && header != "identity" {
+                        let accept_algos = http::parse_accept_encoding(header)
+                            .into_iter()
+                            .filter_map(|(algo, _level)| algo.parse::<CompressionAlgo>().ok())
+                            .collect::<HashSet<_>>();
+                        for (algo, exts) in &self.compressed_variations {
+                            if accept_algos.contains(algo) {
+                                for zip_ext in exts {
+                                    let mut path = abs_path.clone();
+                                    path.as_mut_os_string().push(".");
+                                    path.as_mut_os_string().push(zip_ext.as_str());
+                                    if tokio::fs::symlink_metadata(&path)
+                                        .await
+                                        .map(|m| m.is_file())
+                                        .unwrap_or(false)
+                                    {
+                                        new_abs_path = Some(path);
+                                        content_encoding = Some(algo.to_string());
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -482,7 +498,7 @@ impl Handler for StaticDir {
             } else {
                 res.render(StatusError::internal_server_error().brief("Read file failed."));
             }
-        } else if abs_path.is_dir() {
+        } else if !is_file {
             // list the dir
             if let Ok(mut entries) = tokio::fs::read_dir(&abs_path).await {
                 while let Ok(Some(entry)) = entries.next_entry().await {
@@ -646,9 +662,28 @@ fn list_html(current: &CurrentInfo) -> String {
     );
     ftxt
 }
-#[inline]
 fn list_text(current: &CurrentInfo) -> String {
-    json!(current).to_string()
+    use std::fmt::Write;
+    let format = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+    let mut txt = format!("Directory: {}\n\n", current.path);
+    for dir in &current.dirs {
+        let _ = writeln!(
+            txt,
+            "[DIR]  {}  {}",
+            dir.modified.format(&format).expect("format time failed"),
+            dir.name,
+        );
+    }
+    for file in &current.files {
+        let _ = writeln!(
+            txt,
+            "{:>10}  {}  {}",
+            human_size(file.size),
+            file.modified.format(&format).expect("format time failed"),
+            file.name,
+        );
+    }
+    txt
 }
 
 const HTML_STYLE: &str = r#"

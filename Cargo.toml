@@ -3,10 +3,10 @@ members = ["crates/*", "salvo-worker"]
 resolver = "3"
 
 [workspace.package]
-version = "0.89.2"
+version = "0.91.1"
 authors = ["chrislearn <chris@acroidea.com>"]
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.92"
 description = """
 Salvo is a powerful web framework that can make your work easier.
 """
@@ -15,7 +15,7 @@ repository = "https://github.com/salvo-rs/salvo"
 documentation = "https://docs.rs/salvo/"
 readme = "./README.md"
 keywords = ["http", "async", "web", "framework", "server"]
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 categories = [
     "web-programming::http-server",
     "web-programming::websocket",
@@ -24,28 +24,30 @@ categories = [
 ]
 
 [workspace.dependencies]
-salvo_macros = { version = "0.89.2", path = "crates/macros", default-features = false }
-salvo_core = { version = "0.89.2", path = "crates/core", default-features = false }
-salvo_extra = { version = "0.89.2", path = "crates/extra", default-features = false }
-salvo-acme = { version = "0.89.2", path = "crates/acme", default-features = false }
-salvo-compression = { version = "0.89.2", path = "crates/compression", default-features = false }
-salvo-cache = { version = "0.89.2", path = "crates/cache", default-features = false }
-salvo-cors = { version = "0.89.2", path = "crates/cors", default-features = false }
-salvo-csrf = { version = "0.89.2", path = "crates/csrf", default-features = false }
-salvo-flash = { version = "0.89.2", path = "crates/flash", default-features = false }
+salvo_macros = { version = "0.91.1", path = "crates/macros", default-features = false }
+salvo_core = { version = "0.91.1", path = "crates/core", default-features = false }
+salvo_extra = { version = "0.91.1", path = "crates/extra", default-features = false }
+salvo-acme = { version = "0.91.1", path = "crates/acme", default-features = false }
+salvo-compression = { version = "0.91.1", path = "crates/compression", default-features = false }
+salvo-cache = { version = "0.91.1", path = "crates/cache", default-features = false }
+salvo-cors = { version = "0.91.1", path = "crates/cors", default-features = false }
+salvo-csrf = { version = "0.91.1", path = "crates/csrf", default-features = false }
+salvo-flash = { version = "0.91.1", path = "crates/flash", default-features = false }
 salvo-http3 = { version = "0.7.0", default-features = false }
-salvo-jwt-auth = { version = "0.89.2", path = "crates/jwt-auth", default-features = false }
-salvo-oapi = { version = "0.89.2", path = "./crates/oapi", default-features = false }
-salvo-oapi-macros = { version = "0.89.2", path = "crates/oapi-macros", default-features = false }
-salvo-otel = { version = "0.89.2", path = "crates/otel", default-features = false }
-salvo-proxy = { version = "0.89.2", path = "crates/proxy", default-features = false }
-salvo-rate-limiter = { version = "0.89.2", path = "crates/rate-limiter", default-features = false }
-salvo-serde-util = { version = "0.89.2", path = "crates/serde-util", default-features = true }
-salvo-serve-static = { version = "0.89.2", path = "crates/serve-static", default-features = false }
-salvo-session = { version = "0.89.2", path = "crates/session", default-features = false }
-salvo-craft = { version = "0.89.2", path = "crates/craft", default-features = false }
-salvo-craft-macros = { version = "0.89.2", path = "crates/craft-macros", default-features = false }
-salvo-tus = { version = "0.89.2", path = "crates/tus", default-features = false }
+salvo-jwt-auth = { version = "0.91.1", path = "crates/jwt-auth", default-features = false }
+salvo-oapi = { version = "0.91.1", path = "./crates/oapi", default-features = false }
+salvo-oapi-macros = { version = "0.91.1", path = "crates/oapi-macros", default-features = false }
+salvo-otel = { version = "0.91.1", path = "crates/otel", default-features = false }
+salvo-proxy = { version = "0.91.1", path = "crates/proxy", default-features = false }
+salvo-rate-limiter = { version = "0.91.1", path = "crates/rate-limiter", default-features = false }
+salvo-serde-util = { version = "0.91.1", path = "crates/serde-util", default-features = true }
+salvo-serve-static = { version = "0.91.1", path = "crates/serve-static", default-features = false }
+salvo-session = { version = "0.91.1", path = "crates/session", default-features = false }
+salvo-craft = { version = "0.91.1", path = "crates/craft", default-features = false }
+salvo-craft-macros = { version = "0.91.1", path = "crates/craft-macros", default-features = false }
+salvo-tus = { version = "0.91.1", path = "crates/tus", default-features = false }
+
+certon = "0.1.2"
 
 aead = "0.5"
 aes-gcm = "0.10"
@@ -57,7 +59,7 @@ bytes = "1"
 bcrypt = "0.19"
 cookie = "0.18"
 chacha20poly1305 = "0.10"
-chardetng = "0.1"
+chardetng = "1.0"
 chrono = "0.4"
 compact_str = { version = "0.9", features = ["serde"] }
 content_inspector = "0.2"
@@ -74,7 +76,7 @@ h3-datagram = "0.0.2"
 headers = "0.4"
 http = "1"
 http-body-util = "0.1"
-hmac = "0.12"
+hmac = "0.13"
 hex = "0.4"
 hostname-validator = "1"
 # hyper = { version = "1", features = ["full"] }
@@ -83,11 +85,11 @@ hyper-util = { version = "0.1", default-features = true }
 indexmap = "2"
 inventory = "0.3"
 jsonwebtoken = "10"
-local-ip-address = "0.6.5"
+local-ip-address = "0.6"
 mime = "0.3"
 mime-infer = "4"
 moka = "0.12"
-multer = "3"
+multra = "1"
 multimap = "0.10"
 native-tls = "0.2"
 nix = { version = "0.31", default-features = false }
@@ -121,7 +123,7 @@ serde-xml-rs = "0.8"
 serde_urlencoded = "0.7"
 serde_norway = "0.9"
 serde_with = "3"
-sha2 = "0.10"
+sha2 = "0.11"
 smallvec = "1"
 socket2 = "0.6"
 syn = "2"
@@ -134,7 +136,7 @@ tokio-native-tls = "0.3"
 tokio-rustls = { version = "0.26", default-features = false }
 tokio-openssl = "0.6"
 tokio-stream = { version = "0.1", default-features = false }
-tokio-tungstenite = { version = "0.28", default-features = false }
+tokio-tungstenite = { version = "0.29", default-features = false }
 # tokio-util = "0.7"
 tower = { version = "0.5", default-features = false }
 tracing-subscriber = { version = "0.3" }
@@ -142,7 +144,7 @@ tracing = "0.1"
 tracing-test = "0.2.1"
 ulid = { version = "1", default-features = false }
 url = "2"
-uuid = { version = "1", features = ["js"] }
+uuid = "1"
 x509-parser = "0.18"
 
 # Compress
@@ -150,15 +152,15 @@ brotli = { version = "8", default-features = false }
 flate2 = { version = "1", default-features = false }
 zstd = { version = "0.13", default-features = false }
 
-hyper = { version = "1.8.1", features = [
+hyper = { version = "1", features = [
     # "full",
     "client",
     "http1",
     # "http2",
     "server",
 ] }
-tokio = { version = "1.50.0", default-features = false }
-tokio-util = { version = "0.7.17", default-features = false }
+tokio = { version = "1", default-features = false }
+tokio-util = { version = "0.7", default-features = false }
 reqwest = { version = "^0.13", default-features = false, features = [
     "charset",
     # "http2",
@@ -174,10 +176,10 @@ getrandom_v2 = { package = "getrandom", version = "0.2.17", features = ["js"] }
 getrandom_v3 = { package = "getrandom", version = "0.3.4", features = [
     "wasm_js",
 ] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
-getrandom = { version = "^0.4.1", features = [
+getrandom = { version = "^0.4.2", features = [
     "wasm_js",
 ] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
-worker = { version = "^0.7" }
+worker = { version = "^0.8" }
 
 [profile.release]
 lto = true # 通过对整个程序进行分析，并以增加链接时间为代价，LTO 可以生成更加优化的代码。

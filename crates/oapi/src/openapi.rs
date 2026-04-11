@@ -30,6 +30,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use self::components::Components;
 pub use self::content::Content;
+pub use self::encoding::Encoding;
 pub use self::example::Example;
 pub use self::external_docs::ExternalDocs;
 pub use self::header::Header;
@@ -40,8 +41,8 @@ pub use self::path::{PathItem, PathItemType, Paths};
 pub use self::request_body::RequestBody;
 pub use self::response::{Response, Responses};
 pub use self::schema::{
-    Array, BasicType, Discriminator, KnownFormat, Object, Ref, Schema, SchemaFormat, SchemaType,
-    Schemas,
+    Array, ArrayItems, BasicType, Discriminator, KnownFormat, Number, Object, Ref, Schema,
+    SchemaFormat, SchemaType, Schemas,
 };
 pub use self::security::{SecurityRequirement, SecurityScheme};
 pub use self::server::{Server, ServerVariable, ServerVariables, Servers};
@@ -216,6 +217,58 @@ impl OpenApi {
         self.security.append(&mut other.security);
         self.tags.append(&mut other.tags);
         self
+    }
+
+    /// Nest another [`OpenApi`] document under the given path prefix.
+    ///
+    /// All paths from `other` will be prefixed with `path` and then merged into `self`.
+    /// Components, security, tags, and servers are merged as in [`OpenApi::merge`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use salvo_oapi::OpenApi;
+    /// let api = OpenApi::new("My Api", "1.0.0");
+    /// let user_api = OpenApi::new("User Api", "1.0.0");
+    /// let nested = api.nest("/api/v1", user_api);
+    /// ```
+    #[must_use]
+    pub fn nest<P: Into<String>>(self, path: P, other: Self) -> Self {
+        self.nest_with_path_composer(path, other, |base, item_path| {
+            format!(
+                "{}/{}",
+                base.trim_end_matches('/'),
+                item_path.trim_start_matches('/')
+            )
+        })
+    }
+
+    /// Nest another [`OpenApi`] document with a custom path composer.
+    ///
+    /// In most cases you should use [`OpenApi::nest`] instead.
+    /// Only use this method if you need custom path composition for a specific use case.
+    ///
+    /// `composer` is a function that takes two strings, the base path and the path to nest,
+    /// and returns the composed path for the API Specification.
+    #[must_use]
+    pub fn nest_with_path_composer<P: Into<String>, F: Fn(&str, &str) -> String>(
+        mut self,
+        path: P,
+        mut other: Self,
+        composer: F,
+    ) -> Self {
+        let path: String = path.into();
+
+        // Take paths out of other, prefix them, and insert into self
+        let other_paths = std::mem::take(&mut other.paths);
+        for (item_path, item) in other_paths.iter() {
+            let composed = composer(&path, item_path);
+            self.paths.insert(composed, item.clone());
+        }
+
+        // Merge the remaining parts (servers, components, security, tags)
+        // Paths in other are already empty so merge won't duplicate them
+        self.merge(other)
     }
 
     /// Add [`Info`] metadata of the API.
@@ -1073,7 +1126,7 @@ mod tests {
                                    "schema": {
                                       "type": "integer",
                                       "format": "uint64",
-                                      "minimum": 0.0
+                                      "minimum": 0
                                    }
                                 },
                                 {
@@ -1126,7 +1179,7 @@ mod tests {
                                 "id": {
                                    "type": "integer",
                                    "format": "uint64",
-                                   "minimum": 0.0
+                                   "minimum": 0
                                 },
                                 "name": {
                                    "type": "string"
@@ -1465,10 +1518,17 @@ mod tests {
                             ],
                             "properties": {
                                 "data": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/components/schemas/City"
-                                    }
+                                    "allOf": [
+                                        {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/City"
+                                            }
+                                        },
+                                        {
+                                            "description": "The data returned"
+                                        }
+                                    ]
                                 },
                                 "msg": {
                                     "type": "string",
@@ -1498,7 +1558,7 @@ mod tests {
                                 "code": {
                                     "type": "integer",
                                     "format": "uint16",
-                                    "minimum": 0.0
+                                    "minimum": 0
                                 },
                                 "detail": {
                                     "type": "string"

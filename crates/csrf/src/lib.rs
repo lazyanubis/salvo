@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 //! CSRF middleware for Salvo web framework.
 //!
 //! CSRF middleware for Salvo that provides CSRF (Cross-Site Request Forgery) protection.
@@ -159,7 +160,10 @@ cfg_feature! {
 pub const CSRF_TOKEN_KEY: &str = "salvo.csrf.token";
 
 fn default_skipper(req: &mut Request, _depot: &Depot) -> bool {
-    ![Method::POST, Method::PATCH, Method::DELETE, Method::PUT].contains(req.method())
+    !matches!(
+        *req.method(),
+        Method::POST | Method::PATCH | Method::DELETE | Method::PUT
+    )
 }
 
 /// Store proof.

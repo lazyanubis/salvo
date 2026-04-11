@@ -412,11 +412,11 @@ mod flow_ctrl;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-use crate::http::uri::{Parts as UriParts, Uri};
 pub use flow_ctrl::FlowCtrl;
-
-use crate::{Handler, Response};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
+
+use crate::http::uri::{Parts as UriParts, Uri};
+use crate::{Handler, Response};
 
 const HTML_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b'\'')
@@ -452,6 +452,7 @@ pub(crate) fn split_wild_name(name: &str) -> (&str, &str) {
 
 #[inline]
 #[doc(hidden)]
+#[must_use]
 pub fn decode_url_path(path: &str) -> String {
     percent_encoding::percent_decode_str(path)
         .decode_utf8_lossy()
@@ -460,14 +461,20 @@ pub fn decode_url_path(path: &str) -> String {
 
 #[inline]
 #[doc(hidden)]
+#[must_use]
 pub fn encode_url_path(path: &str) -> String {
-    path.split('/')
-        .map(|s| utf8_percent_encode(s, HTML_ENCODE_SET).to_string())
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut result = String::with_capacity(path.len());
+    for (i, s) in path.split('/').enumerate() {
+        if i > 0 {
+            result.push('/');
+        }
+        result.extend(utf8_percent_encode(s, HTML_ENCODE_SET));
+    }
+    result
 }
 
 #[doc(hidden)]
+#[must_use]
 pub fn normalize_url_path(path: &str) -> String {
     let final_slash = if path.ends_with('/') { "/" } else { "" };
     let mut used_parts = Vec::with_capacity(8);
@@ -485,7 +492,6 @@ pub fn normalize_url_path(path: &str) -> String {
             used_parts.pop();
         } else if cfg!(windows) && is_windows_reserved_name(part) {
             // Skip Windows reserved device names
-            continue;
         } else {
             used_parts.push(part);
         }
@@ -515,8 +521,15 @@ pub fn redirect_to_dir_url(req_uri: &Uri, res: &mut Response) {
             builder = builder.path_and_query(format!("{}/", path_and_query.path()));
         }
     }
-    let redirect_uri = builder.build().expect("Invalid uri");
-    res.render(crate::writing::Redirect::found(redirect_uri));
+    match builder.build() {
+        Ok(redirect_uri) => {
+            res.render(crate::writing::Redirect::found(redirect_uri.to_string()));
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "failed to build redirect URI");
+            res.status_code(crate::http::StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
 }
 
 /// Check if a path component is a Windows reserved device name.
@@ -524,33 +537,15 @@ pub fn redirect_to_dir_url(req_uri: &Uri, res: &mut Response) {
 fn is_windows_reserved_name(name: &str) -> bool {
     // Get the base name without extension
     let base = name.split('.').next().unwrap_or(name);
-    let upper = base.to_ascii_uppercase();
 
-    matches!(
-        upper.as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    )
+    base.eq_ignore_ascii_case("CON")
+        || base.eq_ignore_ascii_case("PRN")
+        || base.eq_ignore_ascii_case("AUX")
+        || base.eq_ignore_ascii_case("NUL")
+        || (base.len() == 4
+            && (base[..3].eq_ignore_ascii_case("COM") || base[..3].eq_ignore_ascii_case("LPT"))
+            && base.as_bytes()[3].is_ascii_digit()
+            && base.as_bytes()[3] != b'0')
 }
 
 #[cfg(test)]

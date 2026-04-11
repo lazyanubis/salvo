@@ -212,14 +212,10 @@ impl Response {
     /// If returns `true`, it means this response is ready for write back and the reset handlers
     /// should be skipped.
     #[inline]
-    pub fn is_stamped(&mut self) -> bool {
-        if let Some(code) = self.status_code
-            && (code.is_client_error() || code.is_server_error() || code.is_redirection())
-        {
-            true
-        } else {
-            false
-        }
+    pub fn is_stamped(&self) -> bool {
+        self.status_code.is_some_and(|code| {
+            code.is_client_error() || code.is_server_error() || code.is_redirection()
+        })
     }
 
     /// Convert to hyper response.
@@ -422,7 +418,7 @@ impl Response {
         P: Into<PathBuf> + Send,
     {
         let path = path.into();
-        if !path.exists() {
+        if tokio::fs::metadata(&path).await.is_err() {
             self.render(StatusError::not_found());
         } else {
             match NamedFile::builder(path).build().await {

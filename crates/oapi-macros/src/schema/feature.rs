@@ -3,8 +3,9 @@ use syn::parse::{Parse, ParseBuffer, ParseStream};
 
 use crate::feature::attributes::{
     AdditionalProperties, Aliases, Bound, ContentEncoding, ContentMediaType, Default, Deprecated,
-    Description, Example, Examples, Format, Inline, Name, Nullable, ReadOnly, Rename, RenameAll,
-    Required, SchemaWith, Skip, SkipBound, Title, ValueType, WriteOnly, XmlAttr,
+    Description, Discriminator, Example, Examples, Format, Ignore, Inline, Name, NoRecursion,
+    Nullable, ReadOnly, Rename, RenameAll, Required, SchemaWith, Skip, SkipBound, Title, ValueType,
+    WriteOnly, XmlAttr,
 };
 use crate::feature::validation::{
     ExclusiveMaximum, ExclusiveMinimum, MaxItems, MaxLength, MaxProperties, Maximum, MinItems,
@@ -34,7 +35,8 @@ impl Parse for NamedFieldStructFeatures {
             Description,
             Skip,
             Bound,
-            SkipBound
+            SkipBound,
+            NoRecursion
         )))
     }
 }
@@ -70,12 +72,23 @@ impl Parse for UnnamedFieldStructFeatures {
             MinLength,
             Pattern,
             MaxItems,
-            MinItems
+            MinItems,
+            NoRecursion
         )))
     }
 }
 
 impl_into_inner!(UnnamedFieldStructFeatures);
+
+pub(crate) struct UnitStructFeatures(Vec<Feature>);
+
+impl Parse for UnitStructFeatures {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self(parse_features!(input as Title, Description)))
+    }
+}
+
+impl_into_inner!(UnitStructFeatures);
 
 pub(crate) struct EnumFeatures(Vec<Feature>);
 
@@ -93,7 +106,8 @@ impl Parse for EnumFeatures {
             Deprecated,
             Description,
             Bound,
-            SkipBound
+            SkipBound,
+            NoRecursion
         )))
     }
 }
@@ -117,6 +131,8 @@ impl Parse for ComplexEnumFeatures {
             Description,
             Bound,
             SkipBound,
+            Discriminator,
+            NoRecursion,
         )))
     }
 }
@@ -154,8 +170,10 @@ impl Parse for NamedFieldFeatures {
             Required,
             Deprecated,
             Skip,
+            Ignore,
             ContentEncoding,
-            ContentMediaType
+            ContentMediaType,
+            NoRecursion
         )))
     }
 }
@@ -228,6 +246,7 @@ impl FromAttributes for Vec<Attribute> {
 impl_merge!(
     NamedFieldStructFeatures,
     UnnamedFieldStructFeatures,
+    UnitStructFeatures,
     EnumFeatures,
     ComplexEnumFeatures,
     NamedFieldFeatures,

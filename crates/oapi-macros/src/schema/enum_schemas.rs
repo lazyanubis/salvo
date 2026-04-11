@@ -15,11 +15,11 @@ use super::feature::{
     self, ComplexEnumFeatures, EnumFeatures, EnumNamedFieldVariantFeatures,
     EnumUnnamedFieldVariantFeatures, FromAttributes,
 };
-use super::{NamedStructSchema, SchemaFeatureExt, UnnamedStructSchema, is_not_skipped};
+use super::{NamedStructSchema, SchemaFeatureExt, UnnamedStructSchema, is_flatten, is_not_skipped};
 use crate::component::ComponentDescription;
 use crate::doc_comment::CommentAttributes;
 use crate::feature::attributes::{
-    Alias, Bound, Example, Name, Rename, RenameAll, SkipBound, Title,
+    Alias, Bound, Discriminator, Example, Name, Rename, RenameAll, SkipBound, Title,
 };
 use crate::feature::{
     Feature, FeaturesExt, IsSkipped, TryToTokensExt, parse_features, pop_feature,
@@ -186,6 +186,8 @@ impl<'e> EnumSchema<'e> {
             let inline: Option<Inline> =
                 pop_feature_as_inner!(enum_features => Feature::Inline(_v));
             let description = pop_feature!(enum_features => Feature::Description(_)).into_inner();
+            let discriminator: Option<Discriminator> =
+                pop_feature_as_inner!(enum_features => Feature::Discriminator(_v));
             Ok(Self {
                 schema_type: EnumSchemaType::Complex(ComplexEnum {
                     enum_name,
@@ -194,6 +196,7 @@ impl<'e> EnumSchema<'e> {
                     variants,
                     rename_all,
                     enum_features,
+                    discriminator,
                 }),
                 name,
                 aliases,
@@ -297,31 +300,38 @@ impl ReprEnum<'_> {
 #[cfg(feature = "repr")]
 impl TryToTokens for ReprEnum<'_> {
     fn try_to_tokens(&self, tokens: &mut TokenStream) -> DiagResult<()> {
-        let container_rules = serde_util::parse_container(self.attributes);
+        let container_rules =
+            serde_util::parse_container(self.attributes).map_err(Diagnostic::from)?;
+
+        let variant_tokens = self
+            .variants
+            .iter()
+            .map(|variant| {
+                let variant_rules =
+                    serde_util::parse_value(&variant.attrs).map_err(Diagnostic::from)?;
+                Ok((variant, variant_rules))
+            })
+            .collect::<DiagResult<Vec<_>>>()?
+            .into_iter()
+            .filter_map(|(variant, variant_rules)| {
+                let variant_type = &variant.ident;
+                if is_not_skipped(variant_rules.as_ref()) {
+                    let repr_type = &self.enum_type;
+                    Some(enum_variant::ReprVariant {
+                        value: quote! { Self::#variant_type as #repr_type },
+                        type_path: repr_type,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<enum_variant::ReprVariant<TokenStream>>>();
 
         regular_enum_to_tokens(
             tokens,
             container_rules.as_ref(),
             &self.enum_features,
-            || {
-                self.variants
-                    .iter()
-                    .filter_map(|variant| {
-                        let variant_type = &variant.ident;
-                        let variant_rules = serde_util::parse_value(&variant.attrs);
-
-                        if is_not_skipped(variant_rules.as_ref()) {
-                            let repr_type = &self.enum_type;
-                            Some(enum_variant::ReprVariant {
-                                value: quote! { Self::#variant_type as #repr_type },
-                                type_path: repr_type,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<enum_variant::ReprVariant<TokenStream>>>()
-            },
+            || variant_tokens,
         )
     }
 }
@@ -368,52 +378,59 @@ impl SimpleEnum<'_> {
 
 impl TryToTokens for SimpleEnum<'_> {
     fn try_to_tokens(&self, tokens: &mut TokenStream) -> DiagResult<()> {
-        let container_rules = serde_util::parse_container(self.attributes);
+        let container_rules =
+            serde_util::parse_container(self.attributes).map_err(Diagnostic::from)?;
+
+        let variant_tokens = self
+            .variants
+            .iter()
+            .map(|variant| {
+                let variant_rules =
+                    serde_util::parse_value(&variant.attrs).map_err(Diagnostic::from)?;
+                Ok((variant, variant_rules))
+            })
+            .collect::<DiagResult<Vec<_>>>()?
+            .into_iter()
+            .filter_map(|(variant, variant_rules)| {
+                if is_not_skipped(variant_rules.as_ref()) {
+                    Some((variant, variant_rules))
+                } else {
+                    None
+                }
+            })
+            .flat_map(|(variant, variant_rules)| {
+                let name = &*variant.ident.to_string();
+                let mut variant_features =
+                    feature::parse_schema_features_with(&variant.attrs, |input| {
+                        Ok(parse_features!(input as Rename))
+                    })
+                    .ok()?
+                    .unwrap_or_default();
+                let variant_name = rename_enum_variant(
+                    name,
+                    &mut variant_features,
+                    variant_rules.as_ref(),
+                    container_rules.as_ref(),
+                    self.rename_all,
+                );
+
+                variant_name
+                    .map(|name| SimpleEnumVariant {
+                        value: name.to_token_stream(),
+                    })
+                    .or_else(|| {
+                        Some(SimpleEnumVariant {
+                            value: name.to_token_stream(),
+                        })
+                    })
+            })
+            .collect::<Vec<SimpleEnumVariant<TokenStream>>>();
 
         regular_enum_to_tokens(
             tokens,
             container_rules.as_ref(),
             &self.enum_features,
-            || {
-                self.variants
-                    .iter()
-                    .filter_map(|variant| {
-                        let variant_rules = serde_util::parse_value(&variant.attrs);
-
-                        if is_not_skipped(variant_rules.as_ref()) {
-                            Some((variant, variant_rules))
-                        } else {
-                            None
-                        }
-                    })
-                    .flat_map(|(variant, variant_rules)| {
-                        let name = &*variant.ident.to_string();
-                        let mut variant_features =
-                            feature::parse_schema_features_with(&variant.attrs, |input| {
-                                Ok(parse_features!(input as Rename))
-                            })
-                            .ok()?
-                            .unwrap_or_default();
-                        let variant_name = rename_enum_variant(
-                            name,
-                            &mut variant_features,
-                            variant_rules.as_ref(),
-                            container_rules.as_ref(),
-                            self.rename_all,
-                        );
-
-                        variant_name
-                            .map(|name| SimpleEnumVariant {
-                                value: name.to_token_stream(),
-                            })
-                            .or_else(|| {
-                                Some(SimpleEnumVariant {
-                                    value: name.to_token_stream(),
-                                })
-                            })
-                    })
-                    .collect::<Vec<SimpleEnumVariant<TokenStream>>>()
-            },
+            || variant_tokens,
         )
     }
 }
@@ -467,6 +484,7 @@ pub(super) struct ComplexEnum<'a> {
     enum_name: Cow<'a, str>,
     enum_features: Vec<Feature>,
     rename_all: Option<RenameAll>,
+    discriminator: Option<Discriminator>,
 }
 
 impl ComplexEnum<'_> {
@@ -532,6 +550,7 @@ impl ComplexEnum<'_> {
                             name: None,
                             aliases: None,
                             inline: None,
+                            compose_context: None,
                         }
                         .try_to_token_stream()?,
                     },
@@ -579,6 +598,7 @@ impl ComplexEnum<'_> {
                             name: None,
                             aliases: None,
                             inline: None,
+                            compose_context: None,
                         }
                         .try_to_token_stream()?,
                     },
@@ -656,6 +676,7 @@ impl ComplexEnum<'_> {
                     name: None,
                     aliases: None,
                     inline: None,
+                    compose_context: None,
                 }
                 .try_to_token_stream()
                 .map(Some)
@@ -680,6 +701,7 @@ impl ComplexEnum<'_> {
                     name: None,
                     aliases: None,
                     inline: None,
+                    compose_context: None,
                 }
                 .try_to_token_stream()
                 .map(Some)
@@ -748,6 +770,7 @@ impl ComplexEnum<'_> {
                     name: None,
                     aliases: None,
                     inline: None,
+                    compose_context: None,
                 }
                 .try_to_token_stream()?;
                 let title = title_features
@@ -760,12 +783,35 @@ impl ComplexEnum<'_> {
                         .unwrap_or(Cow::Borrowed(name))
                         .to_token_stream(),
                 }]);
-                Ok(Some(quote! {
-                    #named_enum
-                        #title
-                        .property(#tag, #variant_name_tokens)
-                        .required(#tag)
-                }))
+
+                // Check if any named field has #[serde(flatten)], which causes
+                // NamedStructSchema to produce an AllOf. In that case we cannot
+                // call .property()/.required() directly on the AllOf; instead we
+                // wrap the tag property in a new Object and append it as an item.
+                let has_flatten = named_fields.named.iter().any(|field| {
+                    let rule = serde_util::parse_value(&field.attrs).ok().flatten();
+                    is_flatten(rule.as_ref())
+                });
+
+                if has_flatten {
+                    let tag_object = quote! {
+                        #oapi::oapi::Object::new()
+                            #title
+                            .property(#tag, #variant_name_tokens)
+                            .required(#tag)
+                    };
+                    Ok(Some(quote! {
+                        #named_enum
+                            .item(#tag_object)
+                    }))
+                } else {
+                    Ok(Some(quote! {
+                        #named_enum
+                            #title
+                            .property(#tag, #variant_name_tokens)
+                            .required(#tag)
+                    }))
+                }
             }
             Fields::Unnamed(unnamed_fields) => {
                 if unnamed_fields.unnamed.len() == 1 {
@@ -797,6 +843,7 @@ impl ComplexEnum<'_> {
                         name: None,
                         aliases: None,
                         inline: None,
+                        compose_context: None,
                     }
                     .try_to_token_stream()?;
 
@@ -929,6 +976,7 @@ impl ComplexEnum<'_> {
                     name: None,
                     aliases: None,
                     inline: None,
+                    compose_context: None,
                 }
                 .try_to_token_stream()?;
                 let title = title_features
@@ -981,6 +1029,7 @@ impl ComplexEnum<'_> {
                         name: None,
                         aliases: None,
                         inline: None,
+                        compose_context: None,
                     }
                     .try_to_token_stream()?;
 
@@ -1057,7 +1106,7 @@ impl ComplexEnum<'_> {
 impl TryToTokens for ComplexEnum<'_> {
     fn try_to_tokens(&self, tokens: &mut TokenStream) -> DiagResult<()> {
         let attributes = &self.attributes;
-        let container_rules = serde_util::parse_container(attributes);
+        let container_rules = serde_util::parse_container(attributes).map_err(Diagnostic::from)?;
 
         let enum_repr = container_rules
             .as_ref()
@@ -1073,14 +1122,14 @@ impl TryToTokens for ComplexEnum<'_> {
         let ts = self
             .variants
             .iter()
-            .filter_map(|variant: &Variant| {
-                let variant_serde_rules = serde_util::parse_value(&variant.attrs);
-                if is_not_skipped(variant_serde_rules.as_ref()) {
-                    Some((variant, variant_serde_rules))
-                } else {
-                    None
-                }
+            .map(|variant: &Variant| {
+                let variant_serde_rules =
+                    serde_util::parse_value(&variant.attrs).map_err(Diagnostic::from)?;
+                Ok((variant, variant_serde_rules))
             })
+            .collect::<DiagResult<Vec<_>>>()?
+            .into_iter()
+            .filter(|(_, variant_serde_rules)| is_not_skipped(variant_serde_rules.as_ref()))
             .map(|(variant, variant_serde_rules)| {
                 let variant_name = &*variant.ident.to_string();
 
@@ -1120,7 +1169,14 @@ impl TryToTokens for ComplexEnum<'_> {
             .into_iter()
             .flatten()
             .collect::<CustomEnum<'_, TokenStream>>();
-        if let Some(tag) = tag {
+        if let Some(discriminator) = &self.discriminator {
+            // User-provided discriminator attribute takes precedence
+            let discriminator_tokens = discriminator.to_token_stream();
+            ts.to_tokens(tokens);
+            tokens.extend(quote! {
+                .discriminator(#discriminator_tokens)
+            });
+        } else if let Some(tag) = tag {
             ts.discriminator(Cow::Borrowed(tag.as_str()))
                 .to_tokens(tokens);
         } else {

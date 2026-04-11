@@ -5,6 +5,7 @@
 mod all_of;
 mod any_of;
 mod array;
+mod number;
 mod object;
 mod one_of;
 
@@ -12,7 +13,8 @@ use std::ops::{Deref, DerefMut};
 
 pub use all_of::AllOf;
 pub use any_of::AnyOf;
-pub use array::Array;
+pub use array::{Array, ArrayItems};
+pub use number::Number;
 pub use object::Object;
 pub use one_of::OneOf;
 use serde::{Deserialize, Serialize};
@@ -191,6 +193,10 @@ pub struct Discriminator {
     /// validation.
     #[serde(skip_serializing_if = "PropMap::is_empty", default)]
     pub mapping: PropMap<String, String>,
+
+    /// Optional extensions "x-something"
+    #[serde(skip_serializing_if = "PropMap::is_empty", flatten)]
+    pub extensions: PropMap<String, serde_json::Value>,
 }
 
 impl Discriminator {
@@ -207,7 +213,15 @@ impl Discriminator {
         Self {
             property_name: property_name.into(),
             mapping: PropMap::new(),
+            extensions: PropMap::new(),
         }
+    }
+
+    /// Add openapi extensions (`x-something`) for [`Discriminator`].
+    #[must_use]
+    pub fn extensions(mut self, extensions: PropMap<String, serde_json::Value>) -> Self {
+        self.extensions = extensions;
+        self
     }
 }
 
@@ -249,6 +263,12 @@ impl From<Array> for AdditionalProperties<Schema> {
 impl From<Ref> for AdditionalProperties<Schema> {
     fn from(value: Ref) -> Self {
         Self::RefOr(RefOr::Ref(value))
+    }
+}
+
+impl From<OneOf> for AdditionalProperties<Schema> {
+    fn from(value: OneOf) -> Self {
+        Self::RefOr(RefOr::Type(Schema::OneOf(value)))
     }
 }
 

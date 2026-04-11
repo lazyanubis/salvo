@@ -11,7 +11,8 @@ use super::{PropMap, RefOr, Schema};
 #[non_exhaustive]
 pub struct Content {
     /// Schema used in response body or request body.
-    pub schema: RefOr<Schema>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<RefOr<Schema>>,
 
     /// Example for request body or response body.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -34,6 +35,10 @@ pub struct Content {
     /// multipart or `application/x-www-form-urlencoded`.
     #[serde(skip_serializing_if = "PropMap::is_empty", default)]
     pub encoding: PropMap<String, Encoding>,
+
+    /// Optional extensions "x-something"
+    #[serde(skip_serializing_if = "PropMap::is_empty", flatten)]
+    pub extensions: PropMap<String, serde_json::Value>,
 }
 
 impl Content {
@@ -41,7 +46,7 @@ impl Content {
     #[must_use]
     pub fn new<I: Into<RefOr<Schema>>>(schema: I) -> Self {
         Self {
-            schema: schema.into(),
+            schema: Some(schema.into()),
             ..Self::default()
         }
     }
@@ -49,7 +54,7 @@ impl Content {
     /// Add schema.
     #[must_use]
     pub fn schema<I: Into<RefOr<Schema>>>(mut self, component: I) -> Self {
-        self.schema = component.into();
+        self.schema = Some(component.into());
         self
     }
 
@@ -85,6 +90,13 @@ impl Content {
         self
     }
 
+    /// Add openapi extensions (`x-something`) for [`Content`].
+    #[must_use]
+    pub fn extensions(mut self, extensions: PropMap<String, serde_json::Value>) -> Self {
+        self.extensions = extensions;
+        self
+    }
+
     /// Add an encoding.
     ///
     /// The `property_name` MUST exist in the [`Content::schema`] as a property,
@@ -107,7 +119,7 @@ impl Content {
 impl From<RefOr<Schema>> for Content {
     fn from(schema: RefOr<Schema>) -> Self {
         Self {
-            schema,
+            schema: Some(schema),
             ..Self::default()
         }
     }

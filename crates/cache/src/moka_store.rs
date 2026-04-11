@@ -164,7 +164,7 @@ mod tests {
     async fn test_moka_store() {
         let _depot = super::super::Depot::new();
         let store = MokaStore::new(100);
-        let key = "test_key".to_string();
+        let key = "test_key".to_owned();
         let entry = CachedEntry {
             status: Some(StatusCode::OK),
             headers: HeaderMap::new(),
@@ -188,7 +188,7 @@ mod tests {
             .time_to_live(Duration::from_secs(1))
             .time_to_idle(Duration::from_secs(1))
             .build();
-        let key = "test_key".to_string();
+        let key = "test_key".to_owned();
         let entry = CachedEntry {
             status: Some(StatusCode::OK),
             headers: HeaderMap::new(),
@@ -210,14 +210,14 @@ mod tests {
     #[test]
     fn test_builder_debug() {
         let builder = MokaStore::<String>::builder();
-        let dbg_str = format!("{:?}", builder);
+        let dbg_str = format!("{builder:?}");
         assert_eq!(dbg_str, "Builder");
     }
 
     #[test]
     fn test_moka_store_debug() {
         let store = MokaStore::<String>::new(100);
-        let dbg_str = format!("{:?}", store);
+        let dbg_str = format!("{store:?}");
         assert_eq!(dbg_str, "MokaStore");
     }
 
@@ -249,8 +249,8 @@ mod tests {
 
         // Try to get the key to give time to the eviction listener to run.
         for _ in 0..10 {
-            store.load_entry(&_depot, &"key1".to_string()).await;
-            store.load_entry(&_depot, &"key2".to_string()).await;
+            store.load_entry(&"key1".to_owned()).await;
+            store.load_entry(&"key2".to_owned()).await;
             if evicted.load(Ordering::SeqCst) {
                 break;
             }

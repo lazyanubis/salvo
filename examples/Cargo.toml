@@ -8,7 +8,7 @@ version = "0.1.0"
 authors = ["chrislearn <chris@acroidea.com>"]
 edition = "2024"
 publish = false
-rust-version = "1.89"
+rust-version = "1.92"
 description = """
 Salvo is a powerful web framework that can make your work easier.
 """
@@ -17,7 +17,7 @@ repository = "https://github.com/salvo-rs/salvo"
 documentation = "https://docs.rs/salvo/"
 readme = "./README.md"
 keywords = ["http", "async", "web", "framework", "server"]
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 categories = [
     "web-programming::http-server",
     "web-programming::websocket",
@@ -29,9 +29,9 @@ categories = [
 anyhow = "1.0.100"
 diesel = { version = "2.3.5" }
 r2d2 = "0.8.10"
-rbatis = "4.6.14"
-rbdc = "4.6.2"
-rbdc-mysql = "4.6.2"
+rbatis = "4.8"
+rbdc = "4.7"
+rbdc-mysql = "4.7"
 rbs = "4.5"
 async-trait = "0.1.89"
 sea-orm = "1.1.19"

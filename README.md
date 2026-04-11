@@ -24,7 +24,7 @@
 <a href="https://docs.rs/salvo"><img alt="Documentation" src="https://docs.rs/salvo/badge.svg" /></a>
 <a href="https://crates.io/crates/salvo"><img alt="Download" src="https://img.shields.io/crates/d/salvo.svg" /></a>
 <a href="https://github.com/rust-secure-code/safety-dance/"><img alt="unsafe forbidden" src="https://img.shields.io/badge/unsafe-forbidden-success.svg" /></a>
-<a href="https://blog.rust-lang.org/2025/08/07/Rust-1.89.0/"><img alt="Rust Version" src="https://img.shields.io/badge/rust-1.89%2B-blue" /></a>
+<a href="https://blog.rust-lang.org/2025/12/11/Rust-1.92.0/"><img alt="Rust Version" src="https://img.shields.io/badge/rust-1.92%2B-blue" /></a>
 <br>
 <a href="https://salvo.rs">
     <img alt="Website" src="https://img.shields.io/badge/https-salvo.rs-%23f00" />
@@ -139,6 +139,13 @@ salvo new my_project
 - [API Documentation](https://docs.rs/salvo)
 - [Examples](./examples/)
 
+## Recommended Projects
+
+- **[Savhub](https://github.com/savhub-ai/savhub)** - Easily manage your AI skills. A platform built with Salvo for organizing and sharing AI capabilities.
+- **[Palpo](https://github.com/palpo-matrix-server/palpo)** - A Matrix server implementation in Rust, powered by Salvo.
+
+Check out the full list of community projects in our [ECOSYSTEM.md](./ECOSYSTEM.md).
+
 ## Performance
 
 Salvo consistently ranks among the fastest Rust web frameworks:
@@ -151,4 +158,4 @@ If you find Salvo useful, consider [buying me a coffee](https://ko-fi.com/chrisl
 
 ## License
 
-Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT).
+Licensed under [Apache License 2.0](LICENSE).

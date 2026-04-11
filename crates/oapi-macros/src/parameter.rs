@@ -123,12 +123,13 @@ impl TryToTokens for ParameterSchema<'_> {
                 schema_features.push(Feature::Inline(inline_type.is_inline.into()));
 
                 to_tokens(
-                    ComponentSchema::new(component::ComponentSchemaProps {
+                    ComponentSchema::for_params(component::ComponentSchemaProps {
                         type_tree: &type_tree,
                         features: Some(schema_features),
                         description: None,
                         deprecated: None,
                         object_name: "",
+                        compose_context: None,
                     })?,
                     required,
                 )

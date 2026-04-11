@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 //! Rate limiting middleware for Salvo.
 //!
 //! This middleware protects your server from abuse by limiting the number of
@@ -228,25 +229,24 @@ impl RealIpIssuer {
 
 //     async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
 //         // Try X-Forwarded-For header first (common with most reverse proxies)
-//         if let Some(xff) = req.headers().get("x-forwarded-for") {
-//             if let Ok(xff_str) = xff.to_str() {
-//                 // X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
-//                 // The first one is the original client IP
-//                 if let Some(first_ip) = xff_str.split(',').next() {
-//                     if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
-//                         return Some(ip);
-//                     }
-//                 }
+//         if let Some(xff) = req.headers().get("x-forwarded-for")
+//             && let Ok(xff_str) = xff.to_str()
+//         {
+//             // X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
+//             // The first one is the original client IP
+//             if let Some(first_ip) = xff_str.split(',').next()
+//                 && let Ok(ip) = first_ip.trim().parse::<IpAddr>()
+//             {
+//                 return Some(ip);
 //             }
 //         }
 
 //         // Try X-Real-IP header (used by nginx)
-//         if let Some(real_ip) = req.headers().get("x-real-ip") {
-//             if let Ok(real_ip_str) = real_ip.to_str() {
-//                 if let Ok(ip) = real_ip_str.trim().parse::<IpAddr>() {
-//                     return Some(ip);
-//                 }
-//             }
+//         if let Some(real_ip) = req.headers().get("x-real-ip")
+//             && let Ok(real_ip_str) = real_ip.to_str()
+//             && let Ok(ip) = real_ip_str.trim().parse::<IpAddr>()
+//         {
+//             return Some(ip);
 //         }
 
 //         // Fall back to remote address
@@ -404,18 +404,15 @@ where
         if self.add_headers {
             res.headers_mut().insert(
                 "X-RateLimit-Limit",
-                HeaderValue::from_str(&guard.limit(&quota).await.to_string())
-                    .expect("Invalid header value"),
+                HeaderValue::from(guard.limit(&quota).await as u64),
             );
             res.headers_mut().insert(
                 "X-RateLimit-Remaining",
-                HeaderValue::from_str(&(guard.remaining(&quota).await).to_string())
-                    .expect("Invalid header value"),
+                HeaderValue::from(guard.remaining(&quota).await as u64),
             );
             res.headers_mut().insert(
                 "X-RateLimit-Reset",
-                HeaderValue::from_str(&guard.reset(&quota).await.to_string())
-                    .expect("Invalid header value"),
+                HeaderValue::from(guard.reset(&quota).await),
             );
         }
         if !verified {
@@ -617,7 +614,7 @@ mod tests {
     #[test]
     fn test_remote_ip_issuer_debug() {
         let issuer = RemoteIpIssuer;
-        let debug_str = format!("{:?}", issuer);
+        let debug_str = format!("{issuer:?}");
         assert!(debug_str.contains("RemoteIpIssuer"));
     }
 }

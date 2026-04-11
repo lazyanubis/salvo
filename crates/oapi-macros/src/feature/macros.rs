@@ -71,7 +71,10 @@ is_validatable! {
     SkipBound => false,
     Bound => false,
     ContentEncoding => false,
-    ContentMediaType => false
+    ContentMediaType => false,
+    Discriminator => false,
+    Ignore => false,
+    NoRecursion => false,
 }
 
 macro_rules! parse_features {
@@ -194,6 +197,9 @@ impl_feature_into_inner! {
     Name,
     AdditionalProperties,
     Required,
+    Discriminator,
+    Ignore,
+    NoRecursion,
 }
 
 macro_rules! impl_into_inner {

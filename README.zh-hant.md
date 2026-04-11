@@ -24,7 +24,7 @@
 <a href="https://docs.rs/salvo"><img alt="Documentation" src="https://docs.rs/salvo/badge.svg" /></a>
 <a href="https://crates.io/crates/salvo"><img alt="Download" src="https://img.shields.io/crates/d/salvo.svg" /></a>
 <a href="https://github.com/rust-secure-code/safety-dance/"><img alt="unsafe forbidden" src="https://img.shields.io/badge/unsafe-forbidden-success.svg" /></a>
-<a href="https://blog.rust-lang.org/2025/08/07/Rust-1.89.0/"><img alt="Rust Version" src="https://img.shields.io/badge/rust-1.89%2B-blue" /></a>
+<a href="https://blog.rust-lang.org/2025/12/11/Rust-1.92.0/"><img alt="Rust Version" src="https://img.shields.io/badge/rust-1.92%2B-blue" /></a>
 <br>
 <a href="https://salvo.rs">
     <img alt="Website" src="https://img.shields.io/badge/https-salvo.rs-%23f00" />
@@ -142,6 +142,13 @@ salvo new my_project
 - [API 文件](https://docs.rs/salvo)
 - [範例程式碼](./examples/)
 
+## 推薦專案
+
+- **[Savhub](https://github.com/savhub-ai/savhub)** - 輕鬆管理你的 AI 技能。基於 Salvo 構建的 AI 能力管理和分享平台。
+- **[Palpo](https://github.com/palpo-matrix-server/palpo)** - 使用 Rust 實現的 Matrix 伺服器，基於 Salvo 構建。
+
+查看完整的社區專案列表：[ECOSYSTEM.md](./ECOSYSTEM.md)。
+
 ## 效能
 
 Salvo 在 Rust Web 框架中效能名列前茅：
@@ -159,4 +166,4 @@ Salvo 在 Rust Web 框架中效能名列前茅：
 
 ## 開源協議
 
-基於 [Apache License 2.0](LICENSE-APACHE) 或 [MIT license](LICENSE-MIT) 雙協議授權。
+基於 [Apache License 2.0](LICENSE) 授權。

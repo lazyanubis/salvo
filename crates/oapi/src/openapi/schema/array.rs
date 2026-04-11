@@ -1,8 +1,116 @@
+use serde::de::Visitor;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::schema::BasicType;
+use crate::schema::{AllOf, AnyOf, BasicType, Object, OneOf, Ref};
 use crate::{Deprecated, PropMap, RefOr, Schema, SchemaType, Xml};
+
+/// Represents [`Array`] items in [JSON Schema Array][json_schema_array].
+///
+/// [json_schema_array]: <https://json-schema.org/understanding-json-schema/reference/array#items>
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum ArrayItems {
+    /// Defines [`Array::items`] as [`RefOr::T(Schema)`]. This is the default for [`Array`].
+    RefOrSchema(Box<RefOr<Schema>>),
+    /// Defines [`Array::items`] as `false` indicating that no extra items are allowed to the
+    /// [`Array`]. This can be used together with [`Array::prefix_items`] to disallow [additional
+    /// items][additional_items] in [`Array`].
+    ///
+    /// [additional_items]: <https://json-schema.org/understanding-json-schema/reference/array#additionalitems>
+    #[serde(with = "array_items_false")]
+    False,
+}
+
+impl Default for ArrayItems {
+    fn default() -> Self {
+        Self::RefOrSchema(Box::new(Object::with_type(BasicType::Object).into()))
+    }
+}
+
+impl From<RefOr<Schema>> for ArrayItems {
+    fn from(value: RefOr<Schema>) -> Self {
+        Self::RefOrSchema(Box::new(value))
+    }
+}
+
+impl From<Schema> for ArrayItems {
+    fn from(value: Schema) -> Self {
+        Self::RefOrSchema(Box::new(RefOr::Type(value)))
+    }
+}
+
+impl From<Object> for ArrayItems {
+    fn from(value: Object) -> Self {
+        Self::RefOrSchema(Box::new(value.into()))
+    }
+}
+
+impl From<Ref> for ArrayItems {
+    fn from(value: Ref) -> Self {
+        Self::RefOrSchema(Box::new(value.into()))
+    }
+}
+
+impl From<AllOf> for ArrayItems {
+    fn from(value: AllOf) -> Self {
+        Self::RefOrSchema(Box::new(value.into()))
+    }
+}
+
+impl From<AnyOf> for ArrayItems {
+    fn from(value: AnyOf) -> Self {
+        Self::RefOrSchema(Box::new(value.into()))
+    }
+}
+
+impl From<OneOf> for ArrayItems {
+    fn from(value: OneOf) -> Self {
+        Self::RefOrSchema(Box::new(value.into()))
+    }
+}
+
+impl From<Array> for ArrayItems {
+    fn from(value: Array) -> Self {
+        Self::RefOrSchema(Box::new(value.into()))
+    }
+}
+
+mod array_items_false {
+    use super::*;
+
+    pub(super) fn serialize<S: serde::Serializer>(serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(false)
+    }
+
+    pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<(), D::Error> {
+        struct ItemsFalseVisitor;
+
+        impl<'de> Visitor<'de> for ItemsFalseVisitor {
+            type Value = ();
+            fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if !v {
+                    Ok(())
+                } else {
+                    Err(serde::de::Error::custom(format!(
+                        "invalid boolean value: {v}, expected false"
+                    )))
+                }
+            }
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("expected boolean false")
+            }
+        }
+
+        deserializer.deserialize_bool(ItemsFalseVisitor)
+    }
+}
 
 /// Array represents [`Vec`] or [`slice`] type  of items.
 ///
@@ -20,7 +128,14 @@ pub struct Array {
     pub title: Option<String>,
 
     /// Schema representing the array items type.
-    pub items: Box<RefOr<Schema>>,
+    pub items: ArrayItems,
+
+    /// Prefix items of [`Array`] is used to define item validation of tuples according to
+    /// [JSON schema item validation][item_validation].
+    ///
+    /// [item_validation]: <https://json-schema.org/understanding-json-schema/reference/array#tupleValidation>
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub prefix_items: Vec<RefOr<Schema>>,
 
     /// Description of the [`Array`]. Markdown syntax is supported.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,6 +170,20 @@ pub struct Array {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub xml: Option<Xml>,
 
+    /// The `content_encoding` keyword specifies the encoding used to store the contents, as
+    /// specified in [RFC 2054, part 6.1](https://tools.ietf.org/html/rfc2045) and [RFC 4648](RFC 2054, part 6.1).
+    ///
+    /// See more details at <https://json-schema.org/understanding-json-schema/reference/non_json_data#contentencoding>
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_encoding: Option<String>,
+
+    /// The _`content_media_type`_ keyword specifies the MIME type of the contents of a string,
+    /// as described in [RFC 2046](https://tools.ietf.org/html/rfc2046).
+    ///
+    /// See more details at <https://json-schema.org/understanding-json-schema/reference/non_json_data#contentmediatype>
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_media_type: Option<String>,
+
     /// Optional extensions `x-something`.
     #[serde(skip_serializing_if = "PropMap::is_empty", flatten)]
     pub extensions: PropMap<String, serde_json::Value>,
@@ -67,6 +196,7 @@ impl Default for Array {
             schema_type: BasicType::Array.into(),
             unique_items: bool::default(),
             items: Default::default(),
+            prefix_items: Vec::default(),
             description: Default::default(),
             deprecated: Default::default(),
             examples: Default::default(),
@@ -74,6 +204,8 @@ impl Default for Array {
             max_items: Default::default(),
             min_items: Default::default(),
             xml: Default::default(),
+            content_encoding: Default::default(),
+            content_media_type: Default::default(),
             extensions: Default::default(),
         }
     }
@@ -95,8 +227,24 @@ impl Array {
     }
     /// Set [`Schema`] type for the [`Array`].
     #[must_use]
-    pub fn items<I: Into<RefOr<Schema>>>(mut self, items: I) -> Self {
-        self.items = Box::new(items.into());
+    pub fn items<I: Into<ArrayItems>>(mut self, items: I) -> Self {
+        self.items = items.into();
+        self
+    }
+
+    /// Add prefix items of [`Array`] to define item validation of tuples according to
+    /// [JSON schema item validation][item_validation].
+    ///
+    /// [item_validation]: <https://json-schema.org/understanding-json-schema/reference/array#tupleValidation>
+    #[must_use]
+    pub fn prefix_items<I: IntoIterator<Item = S>, S: Into<RefOr<Schema>>>(
+        mut self,
+        items: I,
+    ) -> Self {
+        self.prefix_items = items
+            .into_iter()
+            .map(|item| item.into())
+            .collect::<Vec<_>>();
         self
     }
 
@@ -186,6 +334,22 @@ impl Array {
     #[must_use]
     pub fn xml(mut self, xml: Xml) -> Self {
         self.xml = Some(xml);
+        self
+    }
+
+    /// Set or change [`Array::content_encoding`]. Typically left empty but could be `base64` for
+    /// example.
+    #[must_use]
+    pub fn content_encoding<S: Into<String>>(mut self, content_encoding: S) -> Self {
+        self.content_encoding = Some(content_encoding.into());
+        self
+    }
+
+    /// Set or change [`Array::content_media_type`]. Value must be valid MIME type e.g.
+    /// `application/json`.
+    #[must_use]
+    pub fn content_media_type<S: Into<String>>(mut self, content_media_type: S) -> Self {
+        self.content_media_type = Some(content_media_type.into());
         self
     }
 
@@ -290,5 +454,39 @@ mod tests {
 
         let value = serde_json::to_value(&json_value).unwrap();
         assert_eq!(value.get("x-some-extension"), Some(&expected));
+    }
+
+    #[test]
+    fn test_array_with_prefix_items() {
+        let array = Array::new().items(ArrayItems::False).prefix_items([
+            Object::with_type(BasicType::String),
+            Object::with_type(BasicType::Number),
+        ]);
+
+        assert_json_eq!(
+            array,
+            json!({
+                "type": "array",
+                "items": false,
+                "prefixItems": [
+                    { "type": "string" },
+                    { "type": "number" }
+                ]
+            })
+        )
+    }
+
+    #[test]
+    fn test_array_items_false_deserialize() {
+        let json = json!({
+            "type": "array",
+            "items": false,
+            "prefixItems": [
+                { "type": "string" }
+            ]
+        });
+        let array: Array = serde_json::from_value(json).unwrap();
+        assert_eq!(array.items, ArrayItems::False);
+        assert_eq!(array.prefix_items.len(), 1);
     }
 }
