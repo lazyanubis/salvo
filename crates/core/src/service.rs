@@ -279,9 +279,7 @@ impl HyperHandler {
         }
         let mut depot = depot.unwrap_or_default();
         let mut path_state = PathState::new(req.uri().path());
-        let router = self.router.clone();
 
-        let hoops = self.hoops.clone();
         async move {
             if let Some(dm) = state.router.detect(&mut req, &mut path_state).await {
                 req.params = path_state.params;
