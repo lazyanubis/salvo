@@ -205,14 +205,14 @@ mod tests {
         let dbg_str = format!("{builder:?}");
         assert_eq!(dbg_str, "Builder");
     }
-    
+
     #[test]
     fn test_moka_store_debug() {
         let store = MokaStore::<String>::new(100);
         let dbg_str = format!("{store:?}");
         assert_eq!(dbg_str, "MokaStore");
     }
-
+    
     #[tokio::test]
     async fn test_eviction_listener() {
         let _depot = super::super::Depot::new();
@@ -231,9 +231,9 @@ mod tests {
             body: CachedBody::Once("test_body".into()),
         };
         #[rustfmt::skip]
-        store.save_entry(&_depot, "key1".to_string(), entry.clone()).await.unwrap();
+        store.save_entry(&_depot, "key1".to_owned(), entry.clone()).await.unwrap();
         #[rustfmt::skip]
-        store.save_entry(&_depot, "key2".to_string(), entry.clone()).await.unwrap();
+        store.save_entry(&_depot, "key2".to_owned(), entry.clone()).await.unwrap();
 
         // Try to get the key to give time to the eviction listener to run.
         for _ in 0..10 {
@@ -248,4 +248,3 @@ mod tests {
         assert!(evicted.load(Ordering::SeqCst));
     }
 }
-
