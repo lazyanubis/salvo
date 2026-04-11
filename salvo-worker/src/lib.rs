@@ -43,47 +43,34 @@ pub mod salvo {
         pub use super::*;
     }
 
-    #[cfg(feature = "affix-state")]
-    pub use salvo_extra::affix_state;
-
-    #[cfg(feature = "basic-auth")]
-    pub use salvo_extra::basic_auth;
-
     #[cfg(feature = "cache")]
     pub use salvo_cache as cache;
-
-    #[cfg(feature = "caching-headers")]
-    pub use salvo_extra::caching_headers;
-
-    #[cfg(feature = "catch-panic")]
-    pub use salvo_extra::catch_panic;
-
-    // #[cfg(feature = "compression")]
-    // pub use salvo_compression as compression;
-
-    #[cfg(feature = "concurrency-limiter")]
-    pub use salvo_extra::concurrency_limiter;
-
     #[cfg(feature = "cors")]
     pub use salvo_cors as cors;
-
-    #[cfg(feature = "session")]
-    pub use salvo_session as session;
-
     #[cfg(feature = "csrf")]
     pub use salvo_csrf as csrf;
-
-    #[cfg(feature = "flash")]
-    pub use salvo_flash as flash;
-
+    #[cfg(feature = "affix-state")]
+    pub use salvo_extra::affix_state;
+    #[cfg(feature = "basic-auth")]
+    pub use salvo_extra::basic_auth;
+    #[cfg(feature = "caching-headers")]
+    pub use salvo_extra::caching_headers;
+    #[cfg(feature = "catch-panic")]
+    pub use salvo_extra::catch_panic;
+    // #[cfg(feature = "compression")]
+    // pub use salvo_compression as compression;
+    #[cfg(feature = "concurrency-limiter")]
+    pub use salvo_extra::concurrency_limiter;
     // #[cfg(feature = "jwt-auth")]
     // pub use salvo_jwt_auth as jwt_auth;
-
     #[cfg(feature = "logging")]
     pub use salvo_extra::logging;
-
+    #[cfg(feature = "flash")]
+    pub use salvo_flash as flash;
     #[cfg(feature = "oapi")]
     pub use salvo_oapi as oapi;
+    #[cfg(feature = "session")]
+    pub use salvo_session as session;
     #[cfg(feature = "oapi")]
     mod oapi_prelude {
         pub use super::oapi::extract::{PathParam, QueryParam};
@@ -98,28 +85,20 @@ pub mod salvo {
     }
     #[cfg(feature = "oapi")]
     pub use oapi_prelude::*;
-
-    #[cfg(feature = "proxy")]
-    pub use salvo_proxy as proxy;
-
-    #[cfg(feature = "rate-limiter")]
-    pub use salvo_rate_limiter as rate_limiter;
-
     #[cfg(feature = "request-id")]
     pub use salvo_extra::request_id::RequestId;
-
     // #[cfg(feature = "serve-static")]
     // pub use salvo_serve_static::{StaticDir, StaticFile};
-
     #[cfg(feature = "size-limiter")]
     pub use salvo_extra::size_limiter;
-
     // #[cfg(feature = "sse")]
     // pub use salvo_extra::sse;
-
     #[cfg(feature = "timeout")]
     pub use salvo_extra::timeout;
-
     #[cfg(feature = "trailing-slash")]
     pub use salvo_extra::trailing_slash;
+    #[cfg(feature = "proxy")]
+    pub use salvo_proxy as proxy;
+    #[cfg(feature = "rate-limiter")]
+    pub use salvo_rate_limiter as rate_limiter;
 }

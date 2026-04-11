@@ -9,6 +9,8 @@ use std::task::{self, Context, Poll, ready};
 use bytes::{Buf, Bytes};
 use http::{Request, Response, Version};
 use hyper::service::Service;
+#[cfg(not(feature = "hidden-on-ra"))]
+use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::sync::CancellationToken;
@@ -18,8 +20,6 @@ use crate::http::body::{Body, HyperBody};
 #[cfg(feature = "hidden-on-ra")]
 #[cfg(any(feature = "http1", feature = "http2"))]
 use crate::rt::tokio::TokioIo;
-#[cfg(not(feature = "hidden-on-ra"))]
-use hyper_util::rt::TokioIo;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -27,11 +27,11 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 use hyper::server::conn::http1;
 #[cfg(feature = "http2")]
 use hyper::server::conn::http2;
+#[cfg(feature = "http2")]
+use hyper_util::rt::TokioExecutor; // hidden on rust-analyzer
 
 #[cfg(feature = "quinn")]
 use crate::conn::quinn;
-#[cfg(feature = "http2")]
-use hyper_util::rt::TokioExecutor; // hidden on rust-analyzer
 // use crate::rt::tokio::TokioExecutor;
 
 const H2_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -63,7 +63,7 @@ impl HttpBuilder {
             #[cfg(feature = "http1")]
             http1: http1::Builder::new(),
             #[cfg(feature = "http2")]
-            http2: http2::Builder::new(hyper_util::rt::TokioExecutor::new()), // hidden on rust-analyzer
+            http2: http2::Builder::new(hyper_util::rt::TokioExecutor::new()), /* hidden on rust-analyzer */
             #[cfg(feature = "quinn")]
             quinn: crate::conn::quinn::Builder::new(),
         }

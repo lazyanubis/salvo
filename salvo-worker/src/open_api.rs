@@ -1,10 +1,9 @@
 use std::borrow::Cow;
-
-use super::*;
-
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
+
+use super::*;
 
 /// 更新 open-api.json
 #[allow(clippy::expect_used)]

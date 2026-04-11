@@ -1,9 +1,8 @@
 use salvo::http::{StatusCode, StatusError};
 use salvo_core::http::ResBody;
 
-use crate::common::response::MessageResponse;
-
 use super::salvo::*;
+use crate::common::response::MessageResponse;
 
 #[handler]
 pub async fn bad_request(req: &mut Request, depot: &mut Depot, res: &mut Response) {

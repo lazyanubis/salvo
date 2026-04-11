@@ -1,10 +1,11 @@
-use crate::salvo::*;
 use ::serde::{Deserialize, Serialize};
-use salvo::{http::StatusCode, writing::Text};
+use salvo::http::StatusCode;
+use salvo::writing::Text;
 #[cfg(feature = "oapi")]
 use salvo_oapi::{EndpointOutRegister, ToSchema};
 
 use super::time::now_format_utc;
+use crate::salvo::*;
 
 /// 消息对象
 #[derive(Debug, Serialize, Deserialize)]
