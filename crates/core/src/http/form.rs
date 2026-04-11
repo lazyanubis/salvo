@@ -143,6 +143,7 @@ pub struct FilePart {
     #[cfg(target_family = "wasm")] // ? unsupported on wasm
     pub file: CustomFile,
 }
+
 /// Custom file struct for wasm.
 #[cfg(target_family = "wasm")] // ? unsupported on wasm
 #[derive(Clone, Debug)]
@@ -158,6 +159,7 @@ pub struct CustomFile {
     /// millis
     pub last_modified: Option<i64>,
 }
+
 impl FilePart {
     /// Get file name.
     #[inline]
@@ -276,8 +278,9 @@ impl FilePart {
             headers: field.headers().to_owned(),
             size,
         })
+    }
 }
-}
+
 #[cfg(not(target_family = "wasm"))] // ? unsupported on wasm
 impl Drop for FilePart {
     fn drop(&mut self) {
