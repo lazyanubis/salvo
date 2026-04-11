@@ -264,8 +264,7 @@ mod tests {
             .get("x-request-id")
             .unwrap()
             .to_str()
-            .unwrap()
-            .to_owned();
+            .unwrap().to_owned();
         let body = response.take_string().await.unwrap();
         assert_eq!(header_id, body);
     }

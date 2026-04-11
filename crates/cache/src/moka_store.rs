@@ -198,14 +198,14 @@ mod tests {
         let loaded_entry = store.load_entry(&_depot, &key).await;
         assert!(loaded_entry.is_none());
     }
-
+    
     #[test]
     fn test_builder_debug() {
         let builder = MokaStore::<String>::builder();
         let dbg_str = format!("{builder:?}");
         assert_eq!(dbg_str, "Builder");
     }
-
+    
     #[test]
     fn test_moka_store_debug() {
         let store = MokaStore::<String>::new(100);
@@ -248,3 +248,4 @@ mod tests {
         assert!(evicted.load(Ordering::SeqCst));
     }
 }
+
