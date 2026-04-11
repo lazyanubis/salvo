@@ -60,6 +60,7 @@ quinn = ["dep:salvo-http3", "dep:quinn", "dep:h3-datagram", "rustls"]
 rustls = ["dep:tokio-rustls"]
 native-tls = ["dep:tokio-native-tls", "dep:native-tls"]
 openssl = ["dep:openssl", "dep:tokio-openssl"]
+# unix = ["http1", "dep:nix"]
 unix = ["http1"]
 test = [
     "dep:brotli",
@@ -142,6 +143,7 @@ tokio-rustls = { workspace = true, optional = true, features = ["logging"] }
 tokio-util = { workspace = true, default-features = false, optional = true }
 tracing = { workspace = true }
 url = { workspace = true, optional = true }
+
 brotli = { workspace = true, optional = true, features = ["default"] }
 flate2 = { workspace = true, optional = true, features = ["default"] }
 # zstd = { workspace = true, optional = true, features = ["default"] }

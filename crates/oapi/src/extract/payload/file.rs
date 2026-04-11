@@ -27,16 +27,25 @@ pub struct FormFile {
 }
 impl FormFile {
     /// Create a new `FormFile` from a `FilePart`.
+    #[cfg(not(target_family = "wasm"))] // ? no os
     #[must_use]
     pub fn new(file_part: &FilePart) -> Self {
-        #[cfg(not(target_family = "wasm"))] // ? no os
-        let path = file_part.path().to_owned();
-        #[cfg(target_family = "wasm")] // ? no os
-        let path = PathBuf::new();
         Self {
             name: file_part.name().map(|s| s.to_owned()),
             headers: file_part.headers().clone(),
-            path,
+            path: file_part.path().to_owned(),
+            size: file_part.size(),
+        }
+    }
+
+    /// Create a new `FormFile` from a `FilePart`.
+    #[cfg(target_family = "wasm")] // ? no os
+    #[must_use]
+    pub fn new(file_part: &FilePart) -> Self {
+        Self {
+            name: file_part.name().map(|s| s.to_owned()),
+            headers: file_part.headers().clone(),
+            path: PathBuf::new(),
             size: file_part.size(),
         }
     }

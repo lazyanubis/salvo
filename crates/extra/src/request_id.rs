@@ -131,21 +131,21 @@ impl UlidGenerator {
     }
 }
 impl IdGenerator for UlidGenerator {
+    #[cfg(not(target_family = "wasm"))] // ? not os env
     fn generate(&self, _req: &mut Request, _depot: &mut Depot) -> String {
-        #[cfg(not(target_family = "wasm"))] // ? not os env
-        let id = Ulid::new().to_string();
-        #[cfg(target_family = "wasm")] // ? not os env
-        let id = {
-            fn get_random_u128() -> Result<u128, getrandom::Error> {
-                let mut buf = [0u8; 16];
-                getrandom::fill(&mut buf)?;
-                Ok(u128::from_ne_bytes(buf))
-            }
-            let now = worker::js_sys::Date::now() as u64;
-            let random = get_random_u128().unwrap_or_else(|_| now as u128 * now as u128);
-            Ulid::from_parts(now, random).to_string()
-        };
-        id
+        Ulid::new().to_string()
+    }
+
+    #[cfg(target_family = "wasm")] // ? not os env
+    fn generate(&self, _req: &mut Request, _depot: &mut Depot) -> String {
+        fn get_random_u128() -> Result<u128, getrandom::Error> {
+            let mut buf = [0u8; 16];
+            getrandom::fill(&mut buf)?;
+            Ok(u128::from_ne_bytes(buf))
+        }
+        let now = worker::js_sys::Date::now() as u64;
+        let random = get_random_u128().unwrap_or_else(|_| now as u128 * now as u128);
+        Ulid::from_parts(now, random).to_string()
     }
 }
 
@@ -264,7 +264,8 @@ mod tests {
             .get("x-request-id")
             .unwrap()
             .to_str()
-            .unwrap().to_owned();
+            .unwrap()
+            .to_owned();
         let body = response.take_string().await.unwrap();
         assert_eq!(header_id, body);
     }

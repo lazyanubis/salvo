@@ -196,18 +196,18 @@ pub trait CsrfCipher: Send + Sync + 'static {
     fn generate(&self) -> (String, String);
 
     /// Generate a random bytes.
+    #[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
     fn random_bytes(&self, len: usize) -> Vec<u8> {
-        #[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, use getrandom
-        {
-            rand::rng().sample_iter(StandardUniform).take(len).collect()
-        }
-        #[cfg(target_family = "wasm")] // ? unsupported on wasm, use getrandom
-        {
-            let mut bytes = vec![0; len];
-            // getrandom::getrandom(&mut bytes).unwrap();
-            getrandom::fill(&mut bytes).unwrap();
-            bytes
-        }
+        rand::rng().sample_iter(StandardUniform).take(len).collect()
+    }
+
+    /// Generate a random bytes.
+    #[cfg(target_family = "wasm")] // ? unsupported on wasm, use getrandom
+    fn random_bytes(&self, len: usize) -> Vec<u8> {
+        let mut bytes = vec![0; len];
+        // getrandom::getrandom(&mut bytes).unwrap();
+        getrandom::fill(&mut bytes).unwrap();
+        bytes
     }
 }
 

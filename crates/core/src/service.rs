@@ -176,11 +176,8 @@ impl Service {
     /// Handle new request, this function only used for test.
     #[cfg(feature = "test")]
     #[inline]
-    pub async fn handle(
-        &self,
-        request: impl Into<Request> + Send,
-        depot: Option<Depot>,
-    ) -> Response {
+    #[rustfmt::skip]
+    pub async fn handle(&self, request: impl Into<Request> + Send, depot: Option<Depot>) -> Response {
         let request = request.into();
         self.hyper_handler(
             request.local_addr.clone(),
@@ -260,11 +257,8 @@ impl Debug for HyperHandler {
 }
 impl HyperHandler {
     /// Handle [`Request`] and returns [`Response`].
-    pub fn handle(
-        &self,
-        mut req: Request,
-        depot: Option<Depot>,
-    ) -> impl Future<Output = Response> + 'static {
+    #[rustfmt::skip]
+    pub fn handle(&self, mut req: Request, depot: Option<Depot>) -> impl Future<Output = Response> + 'static {
         let state = self.state.clone();
         req.local_addr = self.local_addr.clone();
         req.remote_addr = self.remote_addr.clone();

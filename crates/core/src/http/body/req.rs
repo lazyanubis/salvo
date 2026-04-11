@@ -87,11 +87,8 @@ impl Body for ReqBody {
 
     fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> PollFrame {
         #[inline]
-        fn through_fusewire(
-            poll: PollFrame,
-            #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
-            fusewire: &Option<ArcFusewire>,
-        ) -> PollFrame {
+        #[rustfmt::skip]
+        fn through_fusewire(poll: PollFrame, #[cfg(not(target_family = "wasm"))] /* ? unsupported tokio functions */ fusewire: Option<&ArcFusewire>) -> PollFrame {
             match poll {
                 Poll::Ready(None) => Poll::Ready(None),
                 Poll::Ready(Some(Ok(data))) => {
@@ -121,29 +118,15 @@ impl Body for ReqBody {
                     Poll::Ready(Some(Ok(Frame::data(bytes))))
                 }
             }
-            Self::Hyper {
-                inner,
-                #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
-                fusewire,
-            } => {
+            #[rustfmt::skip]
+            Self::Hyper { inner, #[cfg(not(target_family = "wasm"))] /* ? unsupported tokio functions */ fusewire} => {
                 let poll = Pin::new(inner).poll_frame(cx).map_err(IoError::other);
-                through_fusewire(
-                    poll,
-                    #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
-                    fusewire,
-                )
+                through_fusewire(poll, #[cfg(not(target_family = "wasm"))] /* ? unsupported tokio functions */ fusewire.as_ref())
             }
-            Self::Boxed {
-                inner,
-                #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
-                fusewire,
-            } => {
+            #[rustfmt::skip]
+            Self::Boxed { inner, #[cfg(not(target_family = "wasm"))] /* ? unsupported tokio functions */ fusewire} => {
                 let poll = Pin::new(inner).poll_frame(cx).map_err(IoError::other);
-                through_fusewire(
-                    poll,
-                    #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
-                    fusewire,
-                )
+                through_fusewire(poll, #[cfg(not(target_family = "wasm"))] /* ? unsupported tokio functions */ fusewire.as_ref())
             }
         }
     }

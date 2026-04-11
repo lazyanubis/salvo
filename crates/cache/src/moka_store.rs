@@ -142,12 +142,8 @@ where
         self.inner.get(key).await
     }
 
-    async fn save_entry(
-        &self,
-        _depot: &super::Depot,
-        key: Self::Key,
-        entry: CachedEntry,
-    ) -> Result<(), Self::Error> {
+    #[rustfmt::skip]
+    async fn save_entry(&self, _depot: &super::Depot, key: Self::Key, entry: CachedEntry) -> Result<(), Self::Error> {
         self.inner.insert(key, entry).await;
         Ok(())
     }
@@ -170,10 +166,8 @@ mod tests {
             headers: HeaderMap::new(),
             body: CachedBody::Once("test_body".into()),
         };
-        store
-            .save_entry(&_depot, key.clone(), entry.clone())
-            .await
-            .unwrap();
+        #[rustfmt::skip]
+        store.save_entry(&_depot, key.clone(), entry.clone()).await.unwrap();
         let loaded_entry = store.load_entry(&_depot, &key).await.unwrap();
         assert_eq!(loaded_entry.status, entry.status);
         assert_eq!(loaded_entry.body, entry.body);
@@ -194,10 +188,8 @@ mod tests {
             headers: HeaderMap::new(),
             body: CachedBody::Once("test_body".into()),
         };
-        store
-            .save_entry(&_depot, key.clone(), entry.clone())
-            .await
-            .unwrap();
+        #[rustfmt::skip]
+        store.save_entry(&_depot, key.clone(), entry.clone()).await.unwrap();
         let loaded_entry = store.load_entry(&_depot, &key).await.unwrap();
         assert_eq!(loaded_entry.status, entry.status);
         assert_eq!(loaded_entry.body, entry.body);
@@ -238,14 +230,10 @@ mod tests {
             headers: HeaderMap::new(),
             body: CachedBody::Once("test_body".into()),
         };
-        store
-            .save_entry(&_depot, "key1".to_string(), entry.clone())
-            .await
-            .unwrap();
-        store
-            .save_entry(&_depot, "key2".to_string(), entry.clone())
-            .await
-            .unwrap();
+        #[rustfmt::skip]
+        store.save_entry(&_depot, "key1".to_string(), entry.clone()).await.unwrap();
+        #[rustfmt::skip]
+        store.save_entry(&_depot, "key2".to_string(), entry.clone()).await.unwrap();
 
         // Try to get the key to give time to the eviction listener to run.
         for _ in 0..10 {

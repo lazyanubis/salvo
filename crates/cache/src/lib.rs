@@ -230,11 +230,8 @@ pub trait CacheStore: Send + Sync + 'static {
     /// Key
     type Key: Hash + Eq + Send + Clone + 'static;
     /// Get the cache item from the store.
-    fn load_entry<Q>(
-        &self,
-        depot: &Depot,
-        key: &Q,
-    ) -> impl Future<Output = Option<CachedEntry>> + Send
+    #[rustfmt::skip]
+    fn load_entry<Q>(&self, depot: &Depot, key: &Q) -> impl Future<Output = Option<CachedEntry>> + Send
     where
         Self::Key: Borrow<Q>,
         Q: Hash + Eq + Sync + AsRef<str>;
