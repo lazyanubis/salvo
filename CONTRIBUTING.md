@@ -30,7 +30,7 @@ cd salvo
 Run these commands before opening a pull request:
 
 ```bash
-cargo fmt --all -- --check
+cargo +nightly fmt --all -- --check
 cargo check --all --bins --examples --tests
 cargo test --all --all-features --no-fail-fast
 ```
@@ -66,7 +66,7 @@ cargo check --all --bins --examples --tests
 
 ## Release Notes
 
-If your change should appear in release notes, add a short summary to `CHANGELOG.md` under `Unreleased`.
+If your change should appear in release notes, add a short summary to the repository root `CHANGELOG.md` under `Unreleased`.
 
 ## Reporting Security Issues
 
