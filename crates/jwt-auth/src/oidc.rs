@@ -29,6 +29,26 @@ pub use cache::{CachePolicy, CacheState, JwkSetStore, UpdateAction};
 
 pub(super) type HyperClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
 
+fn default_http_client() -> Result<HyperClient, JwtAuthError> {
+    let https = HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .map_err(|error| JwtAuthError::NativeRootCerts(error.to_string()))?
+        .https_only()
+        .enable_http1()
+        .build();
+    Ok(Client::builder(TokioExecutor::new()).build(https))
+}
+
+fn resolve_or_else<T, E>(
+    provided: Option<T>,
+    build_default: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    match provided {
+        Some(value) => Ok(value),
+        None => build_default(),
+    }
+}
+
 /// ConstDecoder will decode token with a static secret.
 #[derive(Clone)]
 pub struct OidcDecoder {
@@ -115,40 +135,32 @@ where
 
     /// Build a `OidcDecoder`.
     pub fn build(self) -> impl Future<Output = Result<OidcDecoder, JwtAuthError>> {
-        let Self {
-            issuer,
-            http_client,
-            validation,
-        } = self;
-        let issuer = issuer.as_ref().trim_end_matches('/').to_owned();
-
-        //Create an empty JWKS to initialize our Cache
-        let jwks = JwkSet { keys: Vec::new() };
-
-        let validation = validation.unwrap_or_default();
-        let cache = Arc::new(RwLock::new(JwkSetStore::new(
-            jwks,
-            CachePolicy::default(),
-            validation,
-        )));
-        let cache_state = Arc::new(CacheState::new());
-
-        let https = HttpsConnectorBuilder::new()
-            .with_native_roots()
-            .expect("no native root CA certificates found")
-            .https_only()
-            .enable_http1()
-            .build();
-        let http_client =
-            http_client.unwrap_or_else(|| Client::builder(TokioExecutor::new()).build(https));
-        let decoder = OidcDecoder {
-            issuer,
-            http_client,
-            cache,
-            cache_state,
-            notifier: Arc::new(Notify::new()),
-        };
         async move {
+            let Self {
+                issuer,
+                http_client,
+                validation,
+            } = self;
+            let issuer = issuer.as_ref().trim_end_matches('/').to_owned();
+
+            //Create an empty JWKS to initialize our Cache
+            let jwks = JwkSet { keys: Vec::new() };
+
+            let validation = validation.unwrap_or_default();
+            let cache = Arc::new(RwLock::new(JwkSetStore::new(
+                jwks,
+                CachePolicy::default(),
+                validation,
+            )));
+            let cache_state = Arc::new(CacheState::new());
+            let http_client = resolve_or_else(http_client, default_http_client)?;
+            let decoder = OidcDecoder {
+                issuer,
+                http_client,
+                cache,
+                cache_state,
+                notifier: Arc::new(Notify::new()),
+            };
             decoder.update_cache().await?;
             Ok(decoder)
         }
@@ -437,6 +449,16 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn test_uses_provided_http_client_without_building_default_client() {
+        let resolved = resolve_or_else(Some("provided-client"), || -> Result<&str, JwtAuthError> {
+            panic!("default HTTP client should not be built when a custom client is supplied")
+        })
+        .unwrap();
+
+        assert_eq!(resolved, "provided-client");
+    }
 
     #[test]
     fn test_decode_jwk_missing_alg() {
