@@ -84,31 +84,31 @@ jobs:
 
             version="$(
               python - <<'PY' "$path/Cargo.toml"
-import pathlib
-import sys
+          import pathlib
+          import sys
 
-cargo_toml = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-for line in cargo_toml.splitlines():
-    stripped = line.strip()
-    if stripped.startswith("version = "):
-        value = stripped.split("=", 1)[1].strip().strip('"')
-        if "{ workspace = true }" not in value:
-            print(value)
-            break
-else:
-    root = pathlib.Path("Cargo.toml").read_text(encoding="utf-8")
-    in_workspace_package = False
-    for line in root.splitlines():
-        stripped = line.strip()
-        if stripped == "[workspace.package]":
-            in_workspace_package = True
-            continue
-        if in_workspace_package and stripped.startswith("["):
-            break
-        if in_workspace_package and stripped.startswith("version = "):
-            print(stripped.split("=", 1)[1].strip().strip('"'))
-            break
-PY
+          cargo_toml = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          for line in cargo_toml.splitlines():
+              stripped = line.strip()
+              if stripped.startswith("version = "):
+                  value = stripped.split("=", 1)[1].strip().strip('"')
+                  if "{ workspace = true }" not in value:
+                      print(value)
+                      break
+          else:
+              root = pathlib.Path("Cargo.toml").read_text(encoding="utf-8")
+              in_workspace_package = False
+              for line in root.splitlines():
+                  stripped = line.strip()
+                  if stripped == "[workspace.package]":
+                      in_workspace_package = True
+                      continue
+                  if in_workspace_package and stripped.startswith("["):
+                      break
+                  if in_workspace_package and stripped.startswith("version = "):
+                      print(stripped.split("=", 1)[1].strip().strip('"'))
+                      break
+          PY
             )"
 
             echo "Processing ${crate} ${version}"
