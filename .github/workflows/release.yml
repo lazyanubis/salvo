@@ -51,12 +51,36 @@ jobs:
             "salvo:crates/salvo"
           )
 
+          crate_index_path() {
+            local crate="${1,,}"
+
+            case "${#crate}" in
+              1)
+                printf '1/%s\n' "$crate"
+                ;;
+              2)
+                printf '2/%s\n' "$crate"
+                ;;
+              3)
+                printf '3/%s/%s\n' "${crate:0:1}" "$crate"
+                ;;
+              *)
+                printf '%s/%s/%s\n' "${crate:0:2}" "${crate:2:2}" "$crate"
+                ;;
+            esac
+          }
+
           crate_is_published() {
             local crate="$1"
             local version="$2"
-            curl --silent --show-error --fail \
-              "https://crates.io/api/v1/crates/${crate}/${version}" \
-              >/dev/null
+            local index_path
+
+            index_path="$(crate_index_path "$crate")"
+            curl --silent --show-error --fail --location \
+              --header "Accept: text/plain" \
+              --header "User-Agent: salvo-release-ci" \
+              "https://index.crates.io/${index_path}" \
+              | grep --fixed-strings --quiet "\"vers\":\"${version}\""
           }
 
           wait_for_crate() {
@@ -65,15 +89,15 @@ jobs:
 
             for attempt in {1..30}; do
               if crate_is_published "$crate" "$version"; then
-                echo "${crate} ${version} is visible on crates.io"
+                echo "${crate} ${version} is visible in the crates.io index"
                 return 0
               fi
 
-              echo "Waiting for ${crate} ${version} to become visible on crates.io (attempt ${attempt}/30)"
+              echo "Waiting for ${crate} ${version} to become visible in the crates.io index (attempt ${attempt}/30)"
               sleep 10
             done
 
-            echo "Timed out waiting for ${crate} ${version} to appear on crates.io" >&2
+            echo "Timed out waiting for ${crate} ${version} to appear in the crates.io index" >&2
             return 1
           }
 
