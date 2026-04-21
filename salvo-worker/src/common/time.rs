@@ -1,5 +1,3 @@
-use ::time::{OffsetDateTime, UtcOffset};
-
 /// 秒 ms
 pub const SECOND: i64 = 1000;
 /// 分钟 ms
@@ -8,11 +6,6 @@ pub const MINUTE: i64 = SECOND * 60;
 pub const HOUR: i64 = MINUTE * 60;
 /// 天 ms
 pub const DAY: i64 = HOUR * 24;
-
-#[inline]
-fn now() -> OffsetDateTime {
-    OffsetDateTime::now_utc()
-}
 
 /// 获取当前时间戳（毫秒）
 #[inline]
@@ -26,6 +19,13 @@ pub fn now_ms() -> i64 {
 #[must_use]
 pub fn now_nanos() -> i64 {
     worker::js_sys::Date::now() as i64 * 1_000_000
+}
+
+// ================== time ======================
+
+#[inline]
+fn now() -> ::time::OffsetDateTime {
+    ::time::OffsetDateTime::now_utc()
 }
 
 /// 格式化时间，UTC 日期时间
@@ -53,7 +53,7 @@ pub fn now_format_utc() -> String {
 #[must_use]
 pub fn now_format() -> String {
     #[allow(clippy::unwrap_used)] // ? SAFETY
-    let offset = UtcOffset::from_hms(8, 0, 0).unwrap();
+    let offset = ::time::UtcOffset::from_hms(8, 0, 0).unwrap();
     let now = now().to_offset(offset);
     let date = now.date();
     let time = now.time();
@@ -74,9 +74,9 @@ pub fn now_format() -> String {
 #[must_use]
 pub fn format_date_time(nanos: i128) -> String {
     #[allow(clippy::unwrap_used)] // ? SAFETY
-    let offset = UtcOffset::from_hms(8, 0, 0).unwrap();
+    let offset = ::time::UtcOffset::from_hms(8, 0, 0).unwrap();
     #[allow(clippy::unwrap_used)] // ? SAFETY
-    let now = OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap();
+    let now = ::time::OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap();
     let now = now.to_offset(offset);
     let date = now.date();
     let time = now.time();

@@ -1,11 +1,12 @@
+#[cfg(feature = "oapi")]
+use crate::salvo::http::StatusCode;
+#[cfg(feature = "oapi")]
+use crate::salvo::oapi;
+use crate::salvo::writing::Text;
 use ::serde::{Deserialize, Serialize};
-use salvo::http::StatusCode;
-use salvo::writing::Text;
+use salvo_core::{Depot, Request, Response, Writer, async_trait};
 #[cfg(feature = "oapi")]
 use salvo_oapi::{EndpointOutRegister, ToSchema};
-
-use super::time::now_format_utc;
-use crate::salvo::*;
 
 /// 消息对象
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,7 +24,7 @@ pub struct MessageResponse<T: Serialize + Send + 'static> {
 }
 
 fn default_created() -> String {
-    now_format_utc()
+    super::time::now_format_utc()
 }
 
 impl<T: Serialize + Send + 'static> MessageResponse<T> {
@@ -34,7 +35,7 @@ impl<T: Serialize + Send + 'static> MessageResponse<T> {
         Self {
             code: 0,
             message: "success".to_owned(),
-            created: now_format_utc(),
+            created: default_created(),
             data: None,
         }
     }
@@ -45,7 +46,7 @@ impl<T: Serialize + Send + 'static> MessageResponse<T> {
         Self {
             code: 0,
             message: "success".to_owned(),
-            created: now_format_utc(),
+            created: default_created(),
             data: Some(data),
         }
     }
@@ -56,7 +57,7 @@ impl<T: Serialize + Send + 'static> MessageResponse<T> {
         Self {
             code,
             message: message.into(),
-            created: now_format_utc(),
+            created: default_created(),
             data: None,
         }
     }
@@ -81,7 +82,7 @@ impl MessageResponse<()> {
         Self {
             code,
             message: message.into(),
-            created: now_format_utc(),
+            created: default_created(),
             data: None,
         }
     }
@@ -92,7 +93,6 @@ impl MessageResponse<()> {
     }
 }
 
-#[cfg(feature = "oapi")]
 #[async_trait]
 impl<T: Serialize + Send> Writer for MessageResponse<T> {
     async fn write(mut self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
