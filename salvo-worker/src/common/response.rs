@@ -1,12 +1,13 @@
+use ::serde::{Deserialize, Serialize};
+use salvo_core::{Depot, Request, Response, Writer, async_trait};
+#[cfg(feature = "oapi")]
+use salvo_oapi::{EndpointOutRegister, ToSchema};
+
 #[cfg(feature = "oapi")]
 use crate::salvo::http::StatusCode;
 #[cfg(feature = "oapi")]
 use crate::salvo::oapi;
 use crate::salvo::writing::Text;
-use ::serde::{Deserialize, Serialize};
-use salvo_core::{Depot, Request, Response, Writer, async_trait};
-#[cfg(feature = "oapi")]
-use salvo_oapi::{EndpointOutRegister, ToSchema};
 
 /// 消息对象
 #[derive(Debug, Serialize, Deserialize)]
