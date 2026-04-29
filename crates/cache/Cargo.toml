@@ -28,11 +28,11 @@ worker-store = ["dep:worker"]
 bytes = { workspace = true }
 moka = { workspace = true, optional = true, features = ["future"] }
 salvo_core = { workspace = true, features = ["http1"] }
-tokio = { workspace = true, features = ["sync"] }
+# tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, default-features = false, features = ["sync"] }
 tracing = { workspace = true }
 
 time = { workspace = true }
-tokio = { workspace = true, default-features = false }
 sha2 = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

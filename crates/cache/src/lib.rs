@@ -539,7 +539,7 @@ where
 {
     ctrl.call_next(req, depot, res).await;
     let cached_data = cached_response(res)?;
-    if let Err(e) = store.save_entry(key, cached_data.clone()).await {
+    if let Err(e) = store.save_entry(depot, key, cached_data.clone()).await {
         tracing::error!(error = ?e, "cache failed");
     }
     Some(cached_data)
@@ -581,7 +581,7 @@ where
         let Some(key) = self.issuer.issue(req, depot).await else {
             return;
         };
-        let Some(cache) = self.store.load_entry(&key).await else {
+        let Some(cache) = self.store.load_entry(depot, &key).await else {
             match self.in_flight.enter(key.clone()) {
                 FlightPermit::Leader(guard) => {
                     let cached_data =

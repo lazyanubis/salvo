@@ -95,18 +95,19 @@ impl RequestId {
 
     fn generate_id(&self, req: &mut Request, depot: &mut Depot) -> HeaderValue {
         let id = self.generator.generate(req, depot);
-        match HeaderValue::from_str(&id) {
-            Ok(header_value) => header_value,
-            Err(error) => {
-                tracing::warn!(
-                    error = ?error,
-                    generated_id = %id,
-                    "request id generator returned an invalid header value; falling back to ULID"
-                );
-                HeaderValue::from_str(&Ulid::new().to_string())
-                    .expect("ULID should always be a valid header value")
-            }
-        }
+        // match HeaderValue::from_str(&id) {
+        //     Ok(header_value) => header_value,
+        //     Err(error) => {
+        //         tracing::warn!(
+        //             error = ?error,
+        //             generated_id = %id,
+        //             "request id generator returned an invalid header value; falling back to ULID"
+        //         );
+        //         HeaderValue::from_str(&Ulid::new().to_string())
+        //             .expect("ULID should always be a valid header value")
+        //     }
+        // }
+        HeaderValue::from_str(&id).expect("invalid header value")
     }
 }
 
@@ -295,7 +296,8 @@ mod tests {
             .get("x-request-id")
             .unwrap()
             .to_str()
-            .unwrap().to_owned();
+            .unwrap()
+            .to_owned();
         let body = response.take_string().await.unwrap();
         assert_eq!(header_id, body);
     }
