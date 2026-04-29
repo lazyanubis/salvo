@@ -77,15 +77,11 @@ where
     // Ensure body is parsed correctly.
     if let Some(ctype) = req.content_type() {
         match ctype.subtype() {
-            mime::WWW_FORM_URLENCODED | mime::FORM_DATA => {
-                if metadata.has_body_required() {
-                    let _ = req.form_data().await;
-                }
+            mime::WWW_FORM_URLENCODED | mime::FORM_DATA if metadata.has_body_required() => {
+                let _ = req.form_data().await;
             }
-            mime::JSON => {
-                if metadata.has_body_required() {
-                    let _ = req.payload().await;
-                }
+            mime::JSON if metadata.has_body_required() => {
+                let _ = req.payload().await;
             }
             _ => {}
         }
@@ -212,7 +208,7 @@ impl<'de> RequestDeserializer<'de> {
                 .metadata
                 .fields
                 .get(self.field_index as usize)
-                .expect("field must exist.");
+                .expect("field must exist");
             let metadata = field.metadata.expect("field's metadata must exist");
             seed.deserialize(RequestDeserializer {
                 params: self.params,

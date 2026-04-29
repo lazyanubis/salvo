@@ -99,14 +99,14 @@ where
     ) {
         let mut svc = self.0.clone();
         if svc.ready().await.is_err() {
-            tracing::error!("tower service not ready.");
-            res.render(StatusError::internal_server_error().cause("tower service not ready."));
+            tracing::error!("tower service not ready");
+            res.render(StatusError::internal_server_error().cause("tower service not ready"));
             return;
         }
         let Ok(hyper_req) = req.strip_to_hyper::<QB>() else {
-            tracing::error!("strip request to hyper failed.");
+            tracing::error!("strip request to hyper failed");
             res.render(
-                StatusError::internal_server_error().cause("strip request to hyper failed."),
+                StatusError::internal_server_error().cause("strip request to hyper failed"),
             );
             return;
         };
@@ -255,15 +255,15 @@ where
     ) {
         let mut svc = self.0.clone();
         if svc.ready().await.is_err() {
-            tracing::error!("tower service not ready.");
-            res.render(StatusError::internal_server_error().cause("tower service not ready."));
+            tracing::error!("tower service not ready");
+            res.render(StatusError::internal_server_error().cause("tower service not ready"));
             return;
         }
 
         let Ok(mut hyper_req) = req.strip_to_hyper::<QB>() else {
-            tracing::error!("strip request to hyper failed.");
+            tracing::error!("strip request to hyper failed");
             res.render(
-                StatusError::internal_server_error().cause("strip request to hyper failed."),
+                StatusError::internal_server_error().cause("strip request to hyper failed"),
             );
             return;
         };
@@ -320,7 +320,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::future::{Ready, ready};
+    use std::io;
+
+    use http_body_util::Full;
+
     use super::*;
+    use salvo_core::http::{ResBody, StatusCode};
     use salvo_core::test::{ResponseExt, TestClient};
     use salvo_core::{Router, handler};
 
@@ -370,6 +376,73 @@ mod tests {
                 .await
                 .unwrap(),
             "Hello World"
+        );
+    }
+
+    #[derive(Clone)]
+    struct NotReadyService;
+
+    impl Service<hyper::Request<ReqBody>> for NotReadyService {
+        type Response = hyper::Response<Full<Bytes>>;
+        type Error = io::Error;
+        type Future = Ready<Result<Self::Response, Self::Error>>;
+
+        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Err(io::Error::other("not ready")))
+        }
+
+        fn call(&mut self, _req: hyper::Request<ReqBody>) -> Self::Future {
+            ready(Ok(hyper::Response::new(Full::new(Bytes::from_static(
+                b"unused",
+            )))))
+        }
+    }
+
+    #[derive(Clone)]
+    struct FailingService;
+
+    impl Service<hyper::Request<ReqBody>> for FailingService {
+        type Response = hyper::Response<Full<Bytes>>;
+        type Error = io::Error;
+        type Future = Ready<Result<Self::Response, io::Error>>;
+
+        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, _req: hyper::Request<ReqBody>) -> Self::Future {
+            ready(Err(io::Error::other("boom")))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tower_service_compat_ready_error_renders_consistent_message() {
+        let mut response = TestClient::get("http://127.0.0.1:8698")
+            .send(NotReadyService.compat())
+            .await;
+
+        assert_eq!(response.status_code, Some(StatusCode::INTERNAL_SERVER_ERROR));
+        let ResBody::Error(error) = response.take_body() else {
+            panic!("expected an error response body");
+        };
+        assert_eq!(error.code, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.cause.as_ref().map(ToString::to_string).as_deref(), Some("tower service not ready"));
+    }
+
+    #[tokio::test]
+    async fn test_tower_service_compat_call_error_renders_consistent_message() {
+        let mut response = TestClient::get("http://127.0.0.1:8698")
+            .send(FailingService.compat())
+            .await;
+
+        assert_eq!(response.status_code, Some(StatusCode::INTERNAL_SERVER_ERROR));
+        let ResBody::Error(error) = response.take_body() else {
+            panic!("expected an error response body");
+        };
+        assert_eq!(error.code, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            error.cause.as_ref().map(ToString::to_string).as_deref(),
+            Some("call tower service failed: boom")
         );
     }
 }

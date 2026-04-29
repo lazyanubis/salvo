@@ -16,34 +16,103 @@ pub use head::head_handler;
 pub use options::options_handler;
 pub use patch::patch_handler;
 pub use post::post_handler;
+use salvo_core::Request;
 use salvo_core::http::{HeaderMap, HeaderValue};
 
 use crate::error::ProtocolError;
+use crate::options::TusOptions;
 use crate::{H_TUS_RESUMABLE, TUS_VERSION};
 
 pub(crate) const EXPOSE_HEADERS: &str = "Location, Upload-Offset, Upload-Length, Upload-Metadata, Upload-Expires, Tus-Resumable, Tus-Version, Tus-Extension, Tus-Max-Size";
+pub(crate) const DEFAULT_ALLOW_HEADERS: &str =
+    "Tus-Resumable, Upload-Length, Upload-Offset, Upload-Metadata, Content-Type, Content-Length";
 
-pub(crate) fn apply_common_headers(headers: &mut HeaderMap) -> &mut HeaderMap {
+pub(crate) fn apply_common_headers<'a>(
+    req: &Request,
+    opts: &TusOptions,
+    headers: &'a mut HeaderMap,
+) -> &'a mut HeaderMap {
     headers.insert(H_TUS_RESUMABLE, HeaderValue::from_static(TUS_VERSION));
-    headers.insert("access-control-allow-origin", HeaderValue::from_static("*"));
-    headers.insert(
-        "access-control-expose-headers",
-        HeaderValue::from_static(EXPOSE_HEADERS),
-    );
+    apply_cors_headers(req, opts, headers);
     headers.insert("cache-control", HeaderValue::from_static("no-store"));
 
     headers
 }
 
-pub(crate) fn apply_options_headers(headers: &mut HeaderMap) -> &mut HeaderMap {
-    headers.insert("access-control-allow-origin", HeaderValue::from_static("*"));
-    headers.insert(
-        "access-control-expose-headers",
-        HeaderValue::from_static(EXPOSE_HEADERS),
-    );
+pub(crate) fn apply_options_headers<'a>(
+    req: &Request,
+    opts: &TusOptions,
+    headers: &'a mut HeaderMap,
+) -> &'a mut HeaderMap {
+    apply_cors_headers(req, opts, headers);
     headers.insert("cache-control", HeaderValue::from_static("no-store"));
 
     headers
+}
+
+fn apply_cors_headers(req: &Request, opts: &TusOptions, headers: &mut HeaderMap) {
+    if let Some(origin) = cors_allow_origin(req, opts) {
+        headers.insert("access-control-allow-origin", origin);
+        if opts.allowed_credentials {
+            headers.insert(
+                "access-control-allow-credentials",
+                HeaderValue::from_static("true"),
+            );
+        }
+    }
+    if opts.allowed_credentials || !opts.allowed_origins.is_empty() {
+        headers.insert("vary", HeaderValue::from_static("Origin"));
+    }
+    insert_joined_header(
+        headers,
+        "access-control-expose-headers",
+        EXPOSE_HEADERS,
+        &opts.exposed_headers,
+    );
+}
+
+fn cors_allow_origin(req: &Request, opts: &TusOptions) -> Option<HeaderValue> {
+    let origin = req
+        .headers()
+        .get("origin")
+        .and_then(|value| value.to_str().ok());
+    if opts.allowed_origins.is_empty() {
+        if opts.allowed_credentials {
+            return origin.and_then(|origin| HeaderValue::from_str(origin).ok());
+        }
+        return Some(HeaderValue::from_static("*"));
+    }
+
+    if opts.allowed_origins.iter().any(|allowed| allowed == "*") {
+        if opts.allowed_credentials {
+            return origin.and_then(|origin| HeaderValue::from_str(origin).ok());
+        }
+        return Some(HeaderValue::from_static("*"));
+    }
+
+    let origin = origin?;
+    if opts.allowed_origins.iter().any(|allowed| allowed == origin) {
+        HeaderValue::from_str(origin).ok()
+    } else {
+        None
+    }
+}
+
+pub(crate) fn insert_joined_header(
+    headers: &mut HeaderMap,
+    name: &'static str,
+    default_values: &str,
+    extra_values: &[String],
+) {
+    if extra_values.is_empty() {
+        headers.insert(name, HeaderValue::from_str(default_values).unwrap());
+        return;
+    }
+
+    let value = format!("{default_values}, {}", extra_values.join(", "));
+    if let Ok(value) = HeaderValue::from_str(&value) {
+        headers.insert(name, value);
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -65,12 +134,12 @@ impl Metadata {
             }
 
             let key = tokens[0];
-            if !validate_key(key) || !seen.insert(key.to_string()) {
+            if !validate_key(key) || !seen.insert(key.to_owned()) {
                 return Err(ProtocolError::InvalidMetadata);
             }
 
             if tokens.len() == 1 {
-                map.insert(key.to_string(), None);
+                map.insert(key.to_owned(), None);
                 continue;
             }
 
@@ -82,9 +151,9 @@ impl Metadata {
             let decoded = base64::engine::general_purpose::STANDARD
                 .decode(value)
                 .map_err(|_| ProtocolError::InvalidMetadata)?;
-            let decoded_value = String::from_utf8_lossy(&decoded).to_string();
+            let decoded_value = String::from_utf8_lossy(&decoded).into_owned();
 
-            map.insert(key.to_string(), Some(decoded_value));
+            map.insert(key.to_owned(), Some(decoded_value));
         }
 
         Ok(Metadata(map))
@@ -100,7 +169,7 @@ impl Metadata {
                         base64::engine::general_purpose::STANDARD.encode(value.as_bytes());
                     format!("{} {}", key, encoded)
                 }
-                None => key.to_string(),
+                None => key.to_owned(),
             })
             .collect::<Vec<_>>()
             .join(", ")
@@ -156,23 +225,17 @@ mod tests {
     fn test_metadata_parse_single_key_value() {
         let raw = "filename dGVzdC50eHQ="; // "test.txt" in base64
         let metadata = Metadata::parse_metadata(raw).unwrap();
-        assert_eq!(
-            metadata.get("filename"),
-            Some(&Some("test.txt".to_string()))
-        );
+        assert_eq!(metadata.get("filename"), Some(&Some("test.txt".to_owned())));
     }
 
     #[test]
     fn test_metadata_parse_multiple_key_values() {
         let raw = "filename dGVzdC50eHQ=,filetype dGV4dC9wbGFpbg=="; // "test.txt", "text/plain"
         let metadata = Metadata::parse_metadata(raw).unwrap();
-        assert_eq!(
-            metadata.get("filename"),
-            Some(&Some("test.txt".to_string()))
-        );
+        assert_eq!(metadata.get("filename"), Some(&Some("test.txt".to_owned())));
         assert_eq!(
             metadata.get("filetype"),
-            Some(&Some("text/plain".to_string()))
+            Some(&Some("text/plain".to_owned()))
         );
     }
 
@@ -187,12 +250,9 @@ mod tests {
     fn test_metadata_parse_mixed_keys() {
         let raw = "filename dGVzdC50eHQ=,is_private,size MTAyNA=="; // "test.txt", no value, "1024"
         let metadata = Metadata::parse_metadata(raw).unwrap();
-        assert_eq!(
-            metadata.get("filename"),
-            Some(&Some("test.txt".to_string()))
-        );
+        assert_eq!(metadata.get("filename"), Some(&Some("test.txt".to_owned())));
         assert_eq!(metadata.get("is_private"), Some(&None));
-        assert_eq!(metadata.get("size"), Some(&Some("1024".to_string())));
+        assert_eq!(metadata.get("size"), Some(&Some("1024".to_owned())));
     }
 
     #[test]
@@ -236,7 +296,7 @@ mod tests {
         let raw = "file,name dGVzdA==";
         let result = Metadata::parse_metadata(raw).unwrap();
         assert_eq!(result.get("file"), Some(&None));
-        assert_eq!(result.get("name"), Some(&Some("test".to_string())));
+        assert_eq!(result.get("name"), Some(&Some("test".to_owned())));
     }
 
     #[test]
@@ -267,7 +327,7 @@ mod tests {
     #[test]
     fn test_metadata_stringify_single_key_value() {
         let mut metadata = Metadata::default();
-        metadata.insert("filename".to_string(), Some("test.txt".to_string()));
+        metadata.insert("filename".to_owned(), Some("test.txt".to_owned()));
         let result = Metadata::stringify(metadata);
         assert_eq!(result, "filename dGVzdC50eHQ=");
     }
@@ -275,7 +335,7 @@ mod tests {
     #[test]
     fn test_metadata_stringify_key_without_value() {
         let mut metadata = Metadata::default();
-        metadata.insert("is_private".to_string(), None);
+        metadata.insert("is_private".to_owned(), None);
         let result = Metadata::stringify(metadata);
         assert_eq!(result, "is_private");
     }
@@ -283,8 +343,8 @@ mod tests {
     #[test]
     fn test_metadata_stringify_multiple_keys() {
         let mut metadata = Metadata::default();
-        metadata.insert("filename".to_string(), Some("test.txt".to_string()));
-        metadata.insert("is_private".to_string(), None);
+        metadata.insert("filename".to_owned(), Some("test.txt".to_owned()));
+        metadata.insert("is_private".to_owned(), None);
         let result = Metadata::stringify(metadata);
         // Order may vary due to HashMap, so check both parts are present
         assert!(result.contains("filename dGVzdC50eHQ="));
@@ -310,14 +370,14 @@ mod tests {
     #[test]
     fn test_metadata_deref() {
         let mut metadata = Metadata::default();
-        metadata.insert("key".to_string(), Some("value".to_string()));
+        metadata.insert("key".to_owned(), Some("value".to_owned()));
 
         // Test Deref
         assert!(metadata.contains_key("key"));
         assert_eq!(metadata.len(), 1);
 
         // Test DerefMut
-        metadata.insert("key2".to_string(), None);
+        metadata.insert("key2".to_owned(), None);
         assert_eq!(metadata.len(), 2);
     }
 
@@ -326,7 +386,7 @@ mod tests {
         // "文件" (Chinese for "file") in base64
         let raw = "name 5paH5Lu2";
         let metadata = Metadata::parse_metadata(raw).unwrap();
-        assert_eq!(metadata.get("name"), Some(&Some("文件".to_string())));
+        assert_eq!(metadata.get("name"), Some(&Some("文件".to_owned())));
     }
 
     #[test]
@@ -336,7 +396,7 @@ mod tests {
         let metadata = Metadata::parse_metadata(raw).unwrap();
         assert_eq!(
             metadata.get("content"),
-            Some(&Some("hello\nworld".to_string()))
+            Some(&Some("hello\nworld".to_owned()))
         );
     }
 
@@ -372,8 +432,10 @@ mod tests {
 
     #[test]
     fn test_apply_common_headers() {
+        let req = Request::new();
+        let opts = TusOptions::default();
         let mut headers = HeaderMap::new();
-        apply_common_headers(&mut headers);
+        apply_common_headers(&req, &opts, &mut headers);
 
         assert_eq!(headers.get(H_TUS_RESUMABLE).unwrap(), TUS_VERSION);
         assert_eq!(headers.get("access-control-allow-origin").unwrap(), "*");
@@ -390,8 +452,10 @@ mod tests {
 
     #[test]
     fn test_apply_options_headers() {
+        let req = Request::new();
+        let opts = TusOptions::default();
         let mut headers = HeaderMap::new();
-        apply_options_headers(&mut headers);
+        apply_options_headers(&req, &opts, &mut headers);
 
         assert_eq!(headers.get("access-control-allow-origin").unwrap(), "*");
         assert!(
@@ -405,6 +469,61 @@ mod tests {
         assert_eq!(headers.get("cache-control").unwrap(), "no-store");
         // Should NOT have tus-resumable header
         assert!(headers.get(H_TUS_RESUMABLE).is_none());
+    }
+
+    #[test]
+    fn test_apply_common_headers_uses_cors_allowlist() {
+        let mut req = Request::new();
+        req.headers_mut().insert(
+            "origin",
+            HeaderValue::from_static("https://app.example.com"),
+        );
+        let opts = TusOptions {
+            allowed_origins: vec!["https://app.example.com".to_owned()],
+            allowed_credentials: true,
+            exposed_headers: vec!["X-Upload-Id".to_owned()],
+            ..TusOptions::default()
+        };
+        let mut headers = HeaderMap::new();
+
+        apply_common_headers(&req, &opts, &mut headers);
+
+        assert_eq!(
+            headers.get("access-control-allow-origin").unwrap(),
+            "https://app.example.com"
+        );
+        assert_eq!(
+            headers.get("access-control-allow-credentials").unwrap(),
+            "true"
+        );
+        assert_eq!(headers.get("vary").unwrap(), "Origin");
+        assert!(
+            headers
+                .get("access-control-expose-headers")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("X-Upload-Id")
+        );
+    }
+
+    #[test]
+    fn test_apply_common_headers_rejects_unlisted_origin() {
+        let mut req = Request::new();
+        req.headers_mut().insert(
+            "origin",
+            HeaderValue::from_static("https://evil.example.com"),
+        );
+        let opts = TusOptions {
+            allowed_origins: vec!["https://app.example.com".to_owned()],
+            ..TusOptions::default()
+        };
+        let mut headers = HeaderMap::new();
+
+        apply_common_headers(&req, &opts, &mut headers);
+
+        assert!(headers.get("access-control-allow-origin").is_none());
+        assert_eq!(headers.get("vary").unwrap(), "Origin");
     }
 
     #[test]

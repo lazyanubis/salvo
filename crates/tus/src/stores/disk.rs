@@ -9,7 +9,10 @@ use tracing::warn;
 
 use crate::error::{TusError, TusResult};
 use crate::handlers::Metadata;
-use crate::stores::{ByteStream, DataStore, Extension, StoreInfo, UploadInfo};
+use crate::stores::{
+    ByteStream, DataStore, Extension, StoreInfo, UploadInfo, is_upload_size_limit_error,
+};
+use crate::utils::sanitize_path_component;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MetaStoreInfo {
@@ -122,7 +125,7 @@ impl DiskStore {
             .as_ref()
             .and_then(|m| m.get(key))
             .and_then(|v| v.as_ref())
-            .map(|v| v.to_string())
+            .map(|v| v.to_owned())
     }
 
     fn sanitize_filename(name: &str) -> Option<String> {
@@ -132,7 +135,7 @@ impl DiskStore {
         }
         let file_name = Path::new(trimmed)
             .file_name()
-            .map(|s| s.to_string_lossy().to_string())?;
+            .map(|s| s.to_string_lossy().into_owned())?;
         if file_name == "." || file_name == ".." {
             return None;
         }
@@ -145,11 +148,8 @@ impl DiskStore {
 
     fn extension_from_filetype(meta: &MetaUpload) -> Option<String> {
         let filetype = Self::metadata_value(meta, "filetype")?;
-        let subtype = filetype.split('/').nth(1)?.trim();
-        if subtype.is_empty() {
-            return None;
-        }
-        Some(subtype.to_string())
+        let subtype = filetype.split_once('/')?.1;
+        sanitize_path_component(subtype).map(str::to_owned)
     }
 
     fn desired_filename(meta: &MetaUpload) -> Option<String> {
@@ -215,11 +215,11 @@ impl DiskStore {
         }
 
         let storage = meta.storage.get_or_insert_with(|| MetaStoreInfo {
-            type_name: "file".to_string(),
-            path: target_path.to_string_lossy().to_string(),
+            type_name: "file".to_owned(),
+            path: target_path.to_string_lossy().into_owned(),
             bucket: None,
         });
-        storage.path = target_path.to_string_lossy().to_string();
+        storage.path = target_path.to_string_lossy().into_owned();
     }
 
     async fn read_meta(&self, id: &str) -> TusResult<MetaUpload> {
@@ -276,8 +276,8 @@ impl DataStore for DiskStore {
         let mut file = file;
         if file.storage.is_none() {
             file.storage = Some(StoreInfo {
-                type_name: "file".to_string(),
-                path: self.data_path(&file.id).to_string_lossy().to_string(),
+                type_name: "file".to_owned(),
+                path: self.data_path(&file.id).to_string_lossy().into_owned(),
                 bucket: None,
             });
         }
@@ -363,7 +363,14 @@ impl DataStore for DiskStore {
         let mut written: u64 = 0;
         let mut stream = stream;
         while let Some(item) = stream.next().await {
-            let chunk = item.map_err(|e| TusError::Internal(e.to_string()))?;
+            let chunk = match item {
+                Ok(chunk) => chunk,
+                Err(e) if is_upload_size_limit_error(&e) => {
+                    let _ = file.set_len(original_offset).await;
+                    return Err(TusError::PayloadTooLarge);
+                }
+                Err(e) => return Err(TusError::Internal(e.to_string())),
+            };
             if let Some(size) = meta.size
                 && original_offset + written + chunk.len() as u64 > size
             {
@@ -423,12 +430,12 @@ mod tests {
 
     fn create_test_upload_info(id: &str) -> UploadInfo {
         UploadInfo {
-            id: id.to_string(),
+            id: id.to_owned(),
             size: Some(1024),
             offset: Some(0),
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01T00:00:00Z".to_string(),
+            creation_date: "2024-01-01T00:00:00Z".to_owned(),
         }
     }
 
@@ -491,17 +498,17 @@ mod tests {
     fn test_sanitize_filename_valid() {
         assert_eq!(
             DiskStore::sanitize_filename("test.txt"),
-            Some("test.txt".to_string())
+            Some("test.txt".to_owned())
         );
         assert_eq!(
             DiskStore::sanitize_filename("  test.txt  "),
-            Some("test.txt".to_string())
+            Some("test.txt".to_owned())
         );
         assert_eq!(
             DiskStore::sanitize_filename("/path/to/file.txt"),
-            Some("file.txt".to_string())
+            Some("file.txt".to_owned())
         );
-        assert_eq!(DiskStore::sanitize_filename("a"), Some("a".to_string()));
+        assert_eq!(DiskStore::sanitize_filename("a"), Some("a".to_owned()));
     }
 
     #[test]
@@ -515,32 +522,32 @@ mod tests {
     #[test]
     fn test_filename_from_meta_with_filename() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: 0,
             metadata: Some({
                 let mut m = HashMap::new();
-                m.insert("filename".to_string(), Some("document.pdf".to_string()));
+                m.insert("filename".to_owned(), Some("document.pdf".to_owned()));
                 m
             }),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert_eq!(
             DiskStore::filename_from_meta(&meta),
-            Some("document.pdf".to_string())
+            Some("document.pdf".to_owned())
         );
     }
 
     #[test]
     fn test_filename_from_meta_without_filename() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: 0,
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert_eq!(DiskStore::filename_from_meta(&meta), None);
     }
@@ -548,56 +555,56 @@ mod tests {
     #[test]
     fn test_extension_from_filetype() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: 0,
             metadata: Some({
                 let mut m = HashMap::new();
-                m.insert("filetype".to_string(), Some("application/pdf".to_string()));
+                m.insert("filetype".to_owned(), Some("application/pdf".to_owned()));
                 m
             }),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert_eq!(
             DiskStore::extension_from_filetype(&meta),
-            Some("pdf".to_string())
+            Some("pdf".to_owned())
         );
     }
 
     #[test]
     fn test_extension_from_filetype_image() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: 0,
             metadata: Some({
                 let mut m = HashMap::new();
-                m.insert("filetype".to_string(), Some("image/png".to_string()));
+                m.insert("filetype".to_owned(), Some("image/png".to_owned()));
                 m
             }),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert_eq!(
             DiskStore::extension_from_filetype(&meta),
-            Some("png".to_string())
+            Some("png".to_owned())
         );
     }
 
     #[test]
     fn test_extension_from_filetype_invalid() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: 0,
             metadata: Some({
                 let mut m = HashMap::new();
-                m.insert("filetype".to_string(), Some("invalid".to_string()));
+                m.insert("filetype".to_owned(), Some("invalid".to_owned()));
                 m
             }),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert_eq!(DiskStore::extension_from_filetype(&meta), None);
     }
@@ -605,90 +612,114 @@ mod tests {
     #[test]
     fn test_extension_from_filetype_empty_subtype() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: 0,
             metadata: Some({
                 let mut m = HashMap::new();
-                m.insert("filetype".to_string(), Some("application/".to_string()));
+                m.insert("filetype".to_owned(), Some("application/".to_owned()));
                 m
             }),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert_eq!(DiskStore::extension_from_filetype(&meta), None);
     }
 
     #[test]
+    fn test_extension_from_filetype_rejects_path_components() {
+        for filetype in [
+            "image/..\\..\\target",
+            "image/../../target",
+            "image/C:target",
+            "image/png\0target",
+        ] {
+            let meta = MetaUpload {
+                id: "test-id".to_owned(),
+                size: Some(1024),
+                offset: 0,
+                metadata: Some({
+                    let mut m = HashMap::new();
+                    m.insert("filetype".to_owned(), Some(filetype.to_owned()));
+                    m
+                }),
+                storage: None,
+                creation_date: "2024-01-01".to_owned(),
+            };
+            assert_eq!(DiskStore::extension_from_filetype(&meta), None);
+        }
+    }
+
+    #[test]
     fn test_desired_filename_with_name_and_extension() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: 0,
             metadata: Some({
                 let mut m = HashMap::new();
-                m.insert("filename".to_string(), Some("document.pdf".to_string()));
+                m.insert("filename".to_owned(), Some("document.pdf".to_owned()));
                 m
             }),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert_eq!(
             DiskStore::desired_filename(&meta),
-            Some("document.pdf".to_string())
+            Some("document.pdf".to_owned())
         );
     }
 
     #[test]
     fn test_desired_filename_with_name_without_extension() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: 0,
             metadata: Some({
                 let mut m = HashMap::new();
-                m.insert("filename".to_string(), Some("document".to_string()));
-                m.insert("filetype".to_string(), Some("application/pdf".to_string()));
+                m.insert("filename".to_owned(), Some("document".to_owned()));
+                m.insert("filetype".to_owned(), Some("application/pdf".to_owned()));
                 m
             }),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert_eq!(
             DiskStore::desired_filename(&meta),
-            Some("document.pdf".to_string())
+            Some("document.pdf".to_owned())
         );
     }
 
     #[test]
     fn test_desired_filename_only_filetype() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: 0,
             metadata: Some({
                 let mut m = HashMap::new();
-                m.insert("filetype".to_string(), Some("image/png".to_string()));
+                m.insert("filetype".to_owned(), Some("image/png".to_owned()));
                 m
             }),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert_eq!(
             DiskStore::desired_filename(&meta),
-            Some("test-id.png".to_string())
+            Some("test-id.png".to_owned())
         );
     }
 
     #[test]
     fn test_desired_filename_no_metadata() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: 0,
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert_eq!(DiskStore::desired_filename(&meta), None);
     }
@@ -718,8 +749,8 @@ mod tests {
     fn test_resolve_data_path_with_storage() {
         let store = DiskStore::new().disk_root("/uploads");
         let storage = Some(MetaStoreInfo {
-            type_name: "file".to_string(),
-            path: "/custom/path/file.bin".to_string(),
+            type_name: "file".to_owned(),
+            path: "/custom/path/file.bin".to_owned(),
             bucket: None,
         });
         let path = store.resolve_data_path("test-id", &storage);
@@ -736,21 +767,21 @@ mod tests {
     #[test]
     fn test_meta_store_info_from_store_info() {
         let store_info = StoreInfo {
-            type_name: "disk".to_string(),
-            path: "/path/to/file".to_string(),
-            bucket: Some("bucket".to_string()),
+            type_name: "disk".to_owned(),
+            path: "/path/to/file".to_owned(),
+            bucket: Some("bucket".to_owned()),
         };
         let meta_info: MetaStoreInfo = store_info.into();
         assert_eq!(meta_info.type_name, "disk");
         assert_eq!(meta_info.path, "/path/to/file");
-        assert_eq!(meta_info.bucket, Some("bucket".to_string()));
+        assert_eq!(meta_info.bucket, Some("bucket".to_owned()));
     }
 
     #[test]
     fn test_store_info_from_meta_store_info() {
         let meta_info = MetaStoreInfo {
-            type_name: "disk".to_string(),
-            path: "/path/to/file".to_string(),
+            type_name: "disk".to_owned(),
+            path: "/path/to/file".to_owned(),
             bucket: None,
         };
         let store_info: StoreInfo = meta_info.into();
@@ -762,12 +793,12 @@ mod tests {
     #[test]
     fn test_meta_upload_from_upload_info() {
         let upload_info = UploadInfo {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: Some(512),
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         let meta: MetaUpload = upload_info.into();
         assert_eq!(meta.id, "test-id");
@@ -778,12 +809,12 @@ mod tests {
     #[test]
     fn test_meta_upload_from_upload_info_no_offset() {
         let upload_info = UploadInfo {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(1024),
             offset: None,
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         let meta: MetaUpload = upload_info.into();
         assert_eq!(meta.offset, 0); // defaults to 0
@@ -792,12 +823,12 @@ mod tests {
     #[test]
     fn test_upload_info_from_meta_upload() {
         let meta = MetaUpload {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(2048),
             offset: 1024,
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         let upload_info: UploadInfo = meta.into();
         assert_eq!(upload_info.id, "test-id");
@@ -824,12 +855,12 @@ mod tests {
     async fn test_disk_store_create_with_deferred_size() {
         let (store, _temp_dir) = create_test_store();
         let upload_info = UploadInfo {
-            id: "test-deferred".to_string(),
+            id: "test-deferred".to_owned(),
             size: None, // deferred
             offset: Some(0),
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
 
         let _created = store.create(upload_info).await.unwrap();
@@ -872,12 +903,12 @@ mod tests {
     async fn test_disk_store_declare_upload_length() {
         let (store, _temp_dir) = create_test_store();
         let upload_info = UploadInfo {
-            id: "test-declare".to_string(),
+            id: "test-declare".to_owned(),
             size: None,
             offset: Some(0),
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
 
         store.create(upload_info).await.unwrap();
@@ -895,12 +926,12 @@ mod tests {
     async fn test_disk_store_declare_upload_length_too_small() {
         let (store, _temp_dir) = create_test_store();
         let upload_info = UploadInfo {
-            id: "test-declare-small".to_string(),
+            id: "test-declare-small".to_owned(),
             size: None,
             offset: Some(100), // Already has some offset
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
 
         store.create(upload_info).await.unwrap();
@@ -918,12 +949,12 @@ mod tests {
 
         let (store, _temp_dir) = create_test_store();
         let upload_info = UploadInfo {
-            id: "test-write".to_string(),
+            id: "test-write".to_owned(),
             size: Some(100),
             offset: Some(0),
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
 
         store.create(upload_info).await.unwrap();
@@ -972,12 +1003,12 @@ mod tests {
 
         let (store, _temp_dir) = create_test_store();
         let upload_info = UploadInfo {
-            id: "test-write-large".to_string(),
+            id: "test-write-large".to_owned(),
             size: Some(5), // Only 5 bytes allowed
             offset: Some(0),
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
 
         store.create(upload_info).await.unwrap();
@@ -989,6 +1020,46 @@ mod tests {
         let result = store.write("test-write-large", 0, stream).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), TusError::PayloadTooLarge));
+    }
+
+    #[tokio::test]
+    async fn test_disk_store_write_limited_payload_too_large_deferred_size() {
+        use bytes::Bytes;
+        use futures_util::stream;
+
+        let (store, _temp_dir) = create_test_store();
+        let upload_info = UploadInfo {
+            id: "test-write-limited".to_owned(),
+            size: None,
+            offset: Some(0),
+            metadata: None,
+            storage: None,
+            creation_date: "2024-01-01".to_owned(),
+        };
+
+        store.create(upload_info).await.unwrap();
+
+        let chunks = vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(b"12345")),
+            Ok(Bytes::from_static(b"6")),
+        ];
+        let stream: ByteStream = Box::pin(stream::iter(chunks));
+
+        let result = store
+            .write_limited("test-write-limited", 0, stream, Some(5))
+            .await;
+        assert!(matches!(result, Err(TusError::PayloadTooLarge)));
+
+        let info = store
+            .get_upload_file_info("test-write-limited")
+            .await
+            .unwrap();
+        assert_eq!(info.offset, Some(0));
+
+        let meta = store.read_meta("test-write-limited").await.unwrap();
+        let data_path = store.resolve_data_path("test-write-limited", &meta.storage);
+        let data_len = fs::metadata(data_path).await.unwrap().len();
+        assert_eq!(data_len, 0);
     }
 
     #[tokio::test]
@@ -1014,12 +1085,12 @@ mod tests {
 
         let (store, _temp_dir) = create_test_store();
         let upload_info = UploadInfo {
-            id: "test-multi-chunk".to_string(),
+            id: "test-multi-chunk".to_owned(),
             size: Some(100),
             offset: Some(0),
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
 
         store.create(upload_info).await.unwrap();
@@ -1053,15 +1124,15 @@ mod tests {
         let (store, temp_dir) = create_test_store();
 
         let mut metadata = HashMap::new();
-        metadata.insert("filename".to_string(), Some("myfile.txt".to_string()));
+        metadata.insert("filename".to_owned(), Some("myfile.txt".to_owned()));
 
         let upload_info = UploadInfo {
-            id: "test-finalize".to_string(),
+            id: "test-finalize".to_owned(),
             size: Some(5),
             offset: Some(0),
             metadata: Some(Metadata(metadata)),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
 
         store.create(upload_info).await.unwrap();
@@ -1086,16 +1157,16 @@ mod tests {
         let (store, _temp_dir) = create_test_store();
 
         let mut metadata = HashMap::new();
-        metadata.insert("filename".to_string(), Some("test.pdf".to_string()));
-        metadata.insert("filetype".to_string(), Some("application/pdf".to_string()));
+        metadata.insert("filename".to_owned(), Some("test.pdf".to_owned()));
+        metadata.insert("filetype".to_owned(), Some("application/pdf".to_owned()));
 
         let upload_info = UploadInfo {
-            id: "test-metadata".to_string(),
+            id: "test-metadata".to_owned(),
             size: Some(1024),
             offset: Some(0),
             metadata: Some(Metadata(metadata)),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
 
         store.create(upload_info).await.unwrap();
@@ -1103,28 +1174,28 @@ mod tests {
         let info = store.get_upload_file_info("test-metadata").await.unwrap();
         assert!(info.metadata.is_some());
         let meta = info.metadata.unwrap();
-        assert_eq!(meta.get("filename"), Some(&Some("test.pdf".to_string())));
+        assert_eq!(meta.get("filename"), Some(&Some("test.pdf".to_owned())));
     }
 
     #[test]
     fn test_metadata_value_extraction() {
         let meta = MetaUpload {
-            id: "test".to_string(),
+            id: "test".to_owned(),
             size: Some(100),
             offset: 0,
             metadata: Some({
                 let mut m = HashMap::new();
-                m.insert("key1".to_string(), Some("value1".to_string()));
-                m.insert("key2".to_string(), None);
+                m.insert("key1".to_owned(), Some("value1".to_owned()));
+                m.insert("key2".to_owned(), None);
                 m
             }),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
 
         assert_eq!(
             DiskStore::metadata_value(&meta, "key1"),
-            Some("value1".to_string())
+            Some("value1".to_owned())
         );
         assert_eq!(DiskStore::metadata_value(&meta, "key2"), None);
         assert_eq!(DiskStore::metadata_value(&meta, "key3"), None);

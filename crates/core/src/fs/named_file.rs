@@ -365,7 +365,7 @@ fn build_content_disposition(
             None => file_path
                 .as_ref()
                 .file_name()
-                .map(|file_name| file_name.to_string_lossy().to_string())
+                .map(|file_name| file_name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "file".into())
                 .into(),
         };
@@ -614,7 +614,9 @@ impl NamedFile {
         let range = req_headers.get(RANGE);
         if let Some(range) = range {
             if let Ok(range) = range.to_str() {
-                if let Ok(range) = HttpRange::parse(range, length) {
+                if let Ok(range) = HttpRange::parse(range, length)
+                    && !range.is_empty()
+                {
                     length = range[0].length;
                     offset = range[0].start;
                 } else {

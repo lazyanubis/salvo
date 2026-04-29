@@ -22,7 +22,7 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<Arc<Tus>>().expect("missing tus state");
     let store = &state.store;
     let opts = &state.options;
-    apply_common_headers(&mut res.headers);
+    apply_common_headers(req, opts, &mut res.headers);
     if let Err(e) = check_tus_version(
         req.headers()
             .get(H_TUS_RESUMABLE)
@@ -134,7 +134,7 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     };
 
     let max_file_size = opts
-        .get_configured_max_size(req, Some(upload_id.to_string()))
+        .get_configured_max_size(req, Some(upload_id.to_owned()))
         .await;
 
     if let Some(size) = upload_length_value
@@ -229,7 +229,10 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 
             let body = req.take_body();
             let stream = body.map(|frame| frame.map(|frame| frame.into_data().unwrap_or_default()));
-            let written = match store.write(&upload_id, 0, Box::pin(stream)).await {
+            let written = match store
+                .write_limited(&upload_id, 0, Box::pin(stream), max_allowed)
+                .await
+            {
                 Ok(written) => written,
                 Err(e) => {
                     res.status_code = Some(e.status());

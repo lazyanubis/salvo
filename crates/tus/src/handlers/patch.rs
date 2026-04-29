@@ -18,7 +18,7 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<Arc<Tus>>().expect("missing tus state");
     let opts = &state.options;
     let store = &state.store;
-    apply_common_headers(&mut res.headers);
+    apply_common_headers(req, opts, &mut res.headers);
 
     let id = match opts.get_file_id_from_request(req) {
         Ok(id) => id,
@@ -70,9 +70,7 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         on_incoming_request(req, id.clone()).await;
     }
 
-    let max_file_size = opts
-        .get_configured_max_size(req, Some(id.to_string()))
-        .await;
+    let max_file_size = opts.get_configured_max_size(req, Some(id.to_owned())).await;
     let _lock = match opts
         .acquire_write_lock(req, &id, CancellationContext::new())
         .await
@@ -202,11 +200,23 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         _ => None,
     };
 
-    if let (Some(incoming), Some(max_allowed)) = (content_length, max_allowed)
-        && offset + incoming > max_allowed
-    {
-        res.status_code = Some(TusError::Protocol(ProtocolError::ErrMaxSizeExceeded).status());
-        return;
+    let max_write_size = match max_allowed {
+        Some(max_allowed) if offset > max_allowed => {
+            res.status_code = Some(TusError::Protocol(ProtocolError::ErrMaxSizeExceeded).status());
+            return;
+        }
+        Some(max_allowed) => Some(max_allowed - offset),
+        None => None,
+    };
+
+    if let (Some(incoming), Some(max_allowed)) = (content_length, max_allowed) {
+        let exceeds = offset
+            .checked_add(incoming)
+            .map_or(true, |end| end > max_allowed);
+        if exceeds {
+            res.status_code = Some(TusError::Protocol(ProtocolError::ErrMaxSizeExceeded).status());
+            return;
+        }
     }
 
     // let max_body_size = opts.calculate_max_body_size(req, already_uploaded_info,
@@ -215,7 +225,10 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 
     let body = req.take_body();
     let stream = body.map(|frame| frame.map(|frame| frame.into_data().unwrap_or_default()));
-    let written = match store.write(&id, offset, Box::pin(stream)).await {
+    let written = match store
+        .write_limited(&id, offset, Box::pin(stream), max_write_size)
+        .await
+    {
         Ok(written) => written,
         Err(e) => {
             res.status_code = Some(e.status());

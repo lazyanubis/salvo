@@ -233,6 +233,38 @@ impl Tus {
         self
     }
 
+    pub fn allowed_origins<I, S>(mut self, origins: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.options.allowed_origins = origins.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn allowed_headers<I, S>(mut self, headers: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.options.allowed_headers = headers.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn exposed_headers<I, S>(mut self, headers: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.options.exposed_headers = headers.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn allow_credentials(mut self, yes: bool) -> Self {
+        self.options.allowed_credentials = yes;
+        self
+    }
+
     pub fn with_store(mut self, store: impl DataStore) -> Self {
         self.store = Arc::new(store);
         self
@@ -505,6 +537,26 @@ mod tests {
     }
 
     #[test]
+    fn test_tus_cors_options() {
+        let tus = Tus::new()
+            .allowed_origins(["https://app.example.com"])
+            .allowed_headers(["X-Upload-Token"])
+            .exposed_headers(["X-Upload-Id"])
+            .allow_credentials(true);
+
+        assert_eq!(
+            tus.options.allowed_origins,
+            vec!["https://app.example.com".to_owned()]
+        );
+        assert_eq!(
+            tus.options.allowed_headers,
+            vec!["X-Upload-Token".to_owned()]
+        );
+        assert_eq!(tus.options.exposed_headers, vec!["X-Upload-Id".to_owned()]);
+        assert!(tus.options.allowed_credentials);
+    }
+
+    #[test]
     fn test_tus_with_locker() {
         use lockers::memory_locker::MemoryLocker;
 
@@ -552,7 +604,7 @@ mod tests {
     #[tokio::test]
     async fn test_tus_with_upload_id_naming_function() {
         let tus = Tus::new().with_upload_id_naming_function(|_req, _meta| async move {
-            Ok("custom-id".to_string())
+            Ok("custom-id".to_owned())
         });
 
         // Verify the function is set by calling it
@@ -587,7 +639,7 @@ mod tests {
 
         assert!(tus.options.on_incoming_request.is_some());
         let req = Request::default();
-        (tus.options.on_incoming_request.unwrap())(&req, "test-id".to_string()).await;
+        (tus.options.on_incoming_request.unwrap())(&req, "test-id".to_owned()).await;
         assert!(called.load(Ordering::SeqCst));
     }
 

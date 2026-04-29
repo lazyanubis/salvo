@@ -164,7 +164,7 @@ impl WebSocketUpgrade {
     #[inline]
     #[must_use]
     pub fn protocols(mut self, protocols: &[&str]) -> Self {
-        self.protocols = protocols.iter().map(|s| s.to_string()).collect();
+        self.protocols = protocols.iter().map(|s| (*s).to_owned()).collect();
         self
     }
 
@@ -293,7 +293,7 @@ impl WebSocketUpgrade {
             .unwrap_or(false);
         if !matched {
             tracing::debug!("missing connection upgrade");
-            return Err(StatusError::bad_request().brief("Missing connection upgrade."));
+            return Err(StatusError::bad_request().brief("missing connection upgrade"));
         }
         let matched = req_headers
             .get(UPGRADE)
@@ -301,9 +301,9 @@ impl WebSocketUpgrade {
             .map(|v| v.to_lowercase() == "websocket")
             .unwrap_or(false);
         if !matched {
-            tracing::debug!("missing upgrade header or it is not equal websocket");
+            tracing::debug!("missing upgrade header or it is not websocket");
             return Err(StatusError::bad_request()
-                .brief("Missing upgrade header or it is not equal websocket."));
+                .brief("missing upgrade header or it is not websocket"));
         }
         let matched = !req_headers
             .get(SEC_WEBSOCKET_VERSION)
@@ -311,13 +311,12 @@ impl WebSocketUpgrade {
             .map(|v| v == "13")
             .unwrap_or(false);
         if matched {
-            tracing::debug!("websocket version is not equal 13");
-            return Err(StatusError::bad_request().brief("Websocket version is not equal 13."));
+            tracing::debug!("websocket version is not 13");
+            return Err(StatusError::bad_request().brief("websocket version is not 13"));
         }
         let Some(sec_ws_key) = req_headers.typed_get::<SecWebsocketKey>() else {
-            tracing::debug!("sec_websocket_key is not exist in request headers");
-            return Err(StatusError::bad_request()
-                .brief("sec_websocket_key is not exist in request headers."));
+            tracing::debug!("missing sec-websocket-key header");
+            return Err(StatusError::bad_request().brief("missing sec-websocket-key header"));
         };
 
         res.status_code(StatusCode::SWITCHING_PROTOCOLS);
@@ -363,9 +362,9 @@ impl WebSocketUpgrade {
             });
             Ok(())
         } else {
-            tracing::debug!("websocket couldn't be upgraded since no upgrade state was present");
+            tracing::debug!("websocket cannot be upgraded because no upgrade state was present");
             Err(StatusError::bad_request()
-                .brief("Websocket couldn't be upgraded since no upgrade state was present."))
+                .brief("websocket cannot be upgraded because no upgrade state was present"))
         }
     }
 }
@@ -657,6 +656,7 @@ mod tests {
     use salvo_core::conn::{Acceptor, Listener};
     use salvo_core::http::header::*;
     use salvo_core::prelude::*;
+    use salvo_core::test::{ResponseExt, TestClient};
     use salvo_core::rt::tokio::TokioIo;
 
     use super::*;
@@ -755,6 +755,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_websocket_missing_connection_upgrade_returns_consistent_message() {
+        let router = Router::new().goal(connect);
+
+        let mut response = TestClient::get("http://127.0.0.1:5801")
+            .send(router)
+            .await;
+
+        assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
+        assert!(
+            response
+                .take_string()
+                .await
+                .unwrap()
+                .contains("missing connection upgrade")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_websocket_missing_sec_websocket_key_returns_consistent_message() {
+        let router = Router::new().goal(connect);
+
+        let mut response = TestClient::get("http://127.0.0.1:5801")
+            .add_header(UPGRADE, "websocket", true)
+            .add_header(CONNECTION, "Upgrade", true)
+            .add_header(SEC_WEBSOCKET_VERSION, "13", true)
+            .send(router)
+            .await;
+
+        assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
+        assert!(
+            response
+                .take_string()
+                .await
+                .unwrap()
+                .contains("missing sec-websocket-key header")
+        );
+    }
+
+    #[tokio::test]
     async fn test_websocket_with_protocol_match() {
         let router = Router::new().goal(connect_with_protocols);
         let acceptor = TcpListener::new("127.0.0.1:0").bind().await;
@@ -792,7 +831,7 @@ mod tests {
         let res = sender.send_request(req).await.unwrap();
 
         assert_eq!(res.status(), StatusCode::SWITCHING_PROTOCOLS);
-        // Should select "chat.v2" — first supported protocol in client's list
+        // Should select "chat.v2", the first supported protocol in the client's list
         assert_eq!(
             res.headers().get(SEC_WEBSOCKET_PROTOCOL),
             Some(&HeaderValue::from_static("chat.v2")),
@@ -837,7 +876,7 @@ mod tests {
         let res = sender.send_request(req).await.unwrap();
 
         assert_eq!(res.status(), StatusCode::SWITCHING_PROTOCOLS);
-        // No overlap — response should not contain Sec-WebSocket-Protocol
+        // No overlap, so the response should not contain Sec-WebSocket-Protocol
         assert!(res.headers().get(SEC_WEBSOCKET_PROTOCOL).is_none());
     }
 
@@ -878,7 +917,7 @@ mod tests {
         let res = sender.send_request(req).await.unwrap();
 
         assert_eq!(res.status(), StatusCode::SWITCHING_PROTOCOLS);
-        // Client didn't send any protocol — response should not contain one
+        // Client did not send any protocol, so the response should not contain one
         assert!(res.headers().get(SEC_WEBSOCKET_PROTOCOL).is_none());
     }
 

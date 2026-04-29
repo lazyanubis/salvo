@@ -47,6 +47,7 @@ worker-client = []
 [dependencies]
 fastrand = { workspace = true }
 futures-util = { workspace = true, default-features = false }
+# hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper = { workspace = true, features = [
     "server",
     "http1",
@@ -55,6 +56,7 @@ hyper = { workspace = true, features = [
 hyper-rustls = { workspace = true, optional = true, features = [
     # "native-tokio",
     # "rustls-native-certs",
+    # "webpki-roots",
     "http1",
     # "http2",
     # "tls12",
@@ -78,7 +80,6 @@ rustls = { workspace = true, optional = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
-
 futures = { workspace = true }
 bytes = { workspace = true }
 worker = { workspace = true }
@@ -91,8 +92,11 @@ reqwest = { workspace = true, optional = true, features = [
 ] }
 
 [dev-dependencies]
+futures-util = { workspace = true, features = ["sink"] }
 salvo_core = { workspace = true, features = ["http1", "server", "test"] }
 rustls = { workspace = true, features = ["aws-lc-rs"] }
+salvo_extra = { workspace = true, features = ["websocket"] }
+tokio-tungstenite = { workspace = true }
 
 [lints]
 workspace = true

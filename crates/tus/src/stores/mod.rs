@@ -1,18 +1,55 @@
 mod disk;
 
 use std::collections::HashSet;
+use std::io;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
 pub use disk::*;
-use futures_util::Stream;
+use futures_util::{Stream, StreamExt};
 use salvo_core::async_trait;
 use salvo_core::http::HeaderValue;
 
-use crate::error::TusResult;
+use crate::error::{TusError, TusResult};
 use crate::handlers::Metadata;
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static>>;
+const UPLOAD_SIZE_LIMIT_EXCEEDED: &str = "tus upload size limit exceeded";
+
+fn upload_size_limit_error() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, UPLOAD_SIZE_LIMIT_EXCEEDED)
+}
+
+fn is_upload_size_limit_error(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::InvalidData && error.to_string() == UPLOAD_SIZE_LIMIT_EXCEEDED
+}
+
+fn limit_stream(
+    stream: ByteStream,
+    max_bytes: Option<u64>,
+    exceeded: Arc<AtomicBool>,
+) -> ByteStream {
+    let Some(max_bytes) = max_bytes else {
+        return stream;
+    };
+
+    let mut received = 0u64;
+    Box::pin(stream.map(move |item| {
+        let chunk = item?;
+        let Some(next) = received.checked_add(chunk.len() as u64) else {
+            exceeded.store(true, Ordering::Relaxed);
+            return Err(upload_size_limit_error());
+        };
+        if next > max_bytes {
+            exceeded.store(true, Ordering::Relaxed);
+            return Err(upload_size_limit_error());
+        }
+        received = next;
+        Ok(chunk)
+    }))
+}
 
 // #[derive(Debug, Clone)]
 // pub enum StoreType {
@@ -96,6 +133,20 @@ pub trait DataStore: Send + Sync + 'static {
     async fn create(&self, file: UploadInfo) -> TusResult<UploadInfo>;
     async fn remove(&self, id: &str) -> TusResult<()>;
     async fn write(&self, id: &str, offset: u64, stream: ByteStream) -> TusResult<u64>;
+    async fn write_limited(
+        &self,
+        id: &str,
+        offset: u64,
+        stream: ByteStream,
+        max_bytes: Option<u64>,
+    ) -> TusResult<u64> {
+        let exceeded = Arc::new(AtomicBool::new(false));
+        let stream = limit_stream(stream, max_bytes, exceeded.clone());
+        match self.write(id, offset, stream).await {
+            Err(_) if exceeded.load(Ordering::Relaxed) => Err(TusError::PayloadTooLarge),
+            result => result,
+        }
+    }
     async fn get_upload_file_info(&self, id: &str) -> TusResult<UploadInfo>;
     async fn declare_upload_length(&self, id: &str, length: u64) -> TusResult<()>;
 
@@ -183,12 +234,12 @@ mod tests {
     #[test]
     fn test_upload_info_get_size_is_deferred_true() {
         let info = UploadInfo {
-            id: "test".to_string(),
+            id: "test".to_owned(),
             size: None,
             offset: Some(0),
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert!(info.get_size_is_deferred());
     }
@@ -196,12 +247,12 @@ mod tests {
     #[test]
     fn test_upload_info_get_size_is_deferred_false() {
         let info = UploadInfo {
-            id: "test".to_string(),
+            id: "test".to_owned(),
             size: Some(1024),
             offset: Some(0),
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         assert!(!info.get_size_is_deferred());
     }
@@ -209,16 +260,16 @@ mod tests {
     #[test]
     fn test_upload_info_clone() {
         let info = UploadInfo {
-            id: "test-id".to_string(),
+            id: "test-id".to_owned(),
             size: Some(2048),
             offset: Some(512),
             metadata: None,
             storage: Some(StoreInfo {
-                type_name: "disk".to_string(),
-                path: "/uploads/test.bin".to_string(),
+                type_name: "disk".to_owned(),
+                path: "/uploads/test.bin".to_owned(),
                 bucket: None,
             }),
-            creation_date: "2024-01-01T00:00:00Z".to_string(),
+            creation_date: "2024-01-01T00:00:00Z".to_owned(),
         };
 
         let cloned = info.clone();
@@ -234,15 +285,15 @@ mod tests {
     #[test]
     fn test_store_info_clone() {
         let info = StoreInfo {
-            type_name: "s3".to_string(),
-            path: "uploads/file.bin".to_string(),
-            bucket: Some("my-bucket".to_string()),
+            type_name: "s3".to_owned(),
+            path: "uploads/file.bin".to_owned(),
+            bucket: Some("my-bucket".to_owned()),
         };
 
         let cloned = info.clone();
         assert_eq!(cloned.type_name, "s3");
         assert_eq!(cloned.path, "uploads/file.bin");
-        assert_eq!(cloned.bucket, Some("my-bucket".to_string()));
+        assert_eq!(cloned.bucket, Some("my-bucket".to_owned()));
     }
 
     #[test]
@@ -252,23 +303,20 @@ mod tests {
         use crate::handlers::Metadata;
 
         let mut map = HashMap::new();
-        map.insert("filename".to_string(), Some("test.txt".to_string()));
+        map.insert("filename".to_owned(), Some("test.txt".to_owned()));
 
         let info = UploadInfo {
-            id: "test".to_string(),
+            id: "test".to_owned(),
             size: Some(100),
             offset: Some(0),
             metadata: Some(Metadata(map)),
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
 
         assert!(info.metadata.is_some());
         let metadata = info.metadata.unwrap();
-        assert_eq!(
-            metadata.get("filename"),
-            Some(&Some("test.txt".to_string()))
-        );
+        assert_eq!(metadata.get("filename"), Some(&Some("test.txt".to_owned())));
     }
 
     #[test]
@@ -281,8 +329,8 @@ mod tests {
     #[test]
     fn test_store_info_debug() {
         let info = StoreInfo {
-            type_name: "disk".to_string(),
-            path: "/uploads/test.bin".to_string(),
+            type_name: "disk".to_owned(),
+            path: "/uploads/test.bin".to_owned(),
             bucket: None,
         };
         let debug_str = format!("{:?}", info);
@@ -293,12 +341,12 @@ mod tests {
     #[test]
     fn test_upload_info_debug() {
         let info = UploadInfo {
-            id: "abc123".to_string(),
+            id: "abc123".to_owned(),
             size: Some(1024),
             offset: Some(512),
             metadata: None,
             storage: None,
-            creation_date: "2024-01-01".to_string(),
+            creation_date: "2024-01-01".to_owned(),
         };
         let debug_str = format!("{:?}", info);
         assert!(debug_str.contains("abc123"));

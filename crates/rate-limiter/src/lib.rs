@@ -377,14 +377,14 @@ where
             return;
         }
         let Some(key) = self.issuer.issue(req, depot).await else {
-            res.render(StatusError::bad_request().brief("Invalid identifier."));
+            res.render(StatusError::bad_request().brief("invalid identifier"));
             ctrl.skip_rest();
             return;
         };
         let quota = match self.quota_getter.get(&key).await {
             Ok(quota) => quota,
             Err(e) => {
-                tracing::error!(error = ?e, "RateLimiter error: {}", e);
+                tracing::error!(error = ?e, "rate limiter error: {}", e);
                 res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
                 ctrl.skip_rest();
                 return;
@@ -393,7 +393,7 @@ where
         let mut guard = match self.store.load_guard(depot, &key, &self.guard).await {
             Ok(guard) => guard,
             Err(e) => {
-                tracing::error!(error = ?e, "RateLimiter error: {}", e);
+                tracing::error!(error = ?e, "rate limiter error: {}", e);
                 res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
                 ctrl.skip_rest();
                 return;
@@ -420,7 +420,7 @@ where
             ctrl.skip_rest();
         }
         if let Err(e) = self.store.save_guard(depot, key, guard).await {
-            tracing::error!(error = ?e, "RateLimiter save guard failed");
+            tracing::error!(error = ?e, "rate limiter save guard failed");
         }
     }
 }
@@ -442,6 +442,15 @@ mod tests {
         type Key = String;
         async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
             req.query::<Self::Key>("user")
+        }
+    }
+
+    struct MissingIssuer;
+    impl RateIssuer for MissingIssuer {
+        type Key = String;
+
+        async fn issue(&self, _req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
+            None
         }
     }
 
@@ -608,6 +617,31 @@ mod tests {
             .await;
         assert_eq!(response.status_code, Some(StatusCode::OK));
         assert_eq!(response.take_string().await.unwrap(), "Limited page");
+    }
+
+    #[tokio::test]
+    async fn test_missing_identifier_renders_consistent_message() {
+        let limiter = RateLimiter::new(
+            FixedGuard::default(),
+            MokaStore::default(),
+            MissingIssuer,
+            BasicQuota::per_second(1),
+        );
+        let router = Router::new().push(Router::with_path("limited").hoop(limiter).get(limited));
+        let service = Service::new(router);
+
+        let mut response = TestClient::get("http://127.0.0.1:8698/limited")
+            .send(&service)
+            .await;
+
+        assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
+        assert!(
+            response
+                .take_string()
+                .await
+                .unwrap()
+                .contains("invalid identifier")
+        );
     }
 
     // Tests for RemoteIpIssuer

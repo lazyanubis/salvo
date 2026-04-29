@@ -138,7 +138,7 @@ pub trait IntoVecString {
     fn into_vec_string(self) -> Vec<String>;
 }
 
-impl IntoVecString for &'static str {
+impl IntoVecString for &str {
     fn into_vec_string(self) -> Vec<String> {
         vec![self.to_owned()]
     }

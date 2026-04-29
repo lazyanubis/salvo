@@ -208,6 +208,16 @@ pub enum JwtAuthError {
     /// Failed to discover OIDC configuration
     #[error("Failed to discover OIDC configuration")]
     DiscoverError,
+    /// Failed to load native root certificates for the default OIDC HTTP client
+    #[cfg(feature = "oidc")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "oidc")))]
+    #[error("Failed to load native root certificates for OIDC HTTP client: {0}")]
+    NativeRootCerts(String),
+    /// OIDC audience must be configured.
+    #[cfg(feature = "oidc")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "oidc")))]
+    #[error("OIDC audience must be configured")]
+    MissingOidcAudience,
     /// Decoding of JWKS error
     #[error("Decoding of JWKS error")]
     DecodeError(#[from] base64::DecodeError),

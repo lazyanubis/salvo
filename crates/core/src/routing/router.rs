@@ -100,9 +100,14 @@ impl Router {
                 let original_matched_parts_len = path_state.matched_parts.len();
                 for child in &self.routers {
                     if let Some(dm) = child.detect(req, path_state).await {
-                        let mut hoops = Vec::with_capacity(self.hoops.len() + dm.hoops.len());
-                        hoops.extend_from_slice(&self.hoops);
-                        hoops.extend_from_slice(&dm.hoops);
+                        let hoops = if self.hoops.is_empty() {
+                            dm.hoops
+                        } else {
+                            let mut hoops = Vec::with_capacity(self.hoops.len() + dm.hoops.len());
+                            hoops.extend_from_slice(&self.hoops);
+                            hoops.extend_from_slice(&dm.hoops);
+                            hoops
+                        };
                         return Some(DetectMatched {
                             hoops,
                             goal: dm.goal.clone(),
@@ -209,24 +214,42 @@ impl Router {
 
     /// Create a new router and set path filter.
     ///
-    /// # Panics
-    ///
-    /// Panics if path value is not in correct format.
+    /// Invalid path patterns are logged and converted into a filter that never matches.
+    /// Use [`Router::try_with_path`] to handle malformed patterns explicitly.
     #[inline]
     #[must_use]
     pub fn with_path(path: impl Into<String>) -> Self {
         Self::with_filter(PathFilter::new(path))
     }
 
+    /// Try creating a new router and set path filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path pattern is malformed.
+    #[inline]
+    pub fn try_with_path(path: impl Into<String>) -> Result<Self, String> {
+        Ok(Self::with_filter(PathFilter::try_new(path)?))
+    }
+
     /// Create a new path filter for current router.
     ///
-    /// # Panics
-    ///
-    /// Panics if path value is not in correct format.
+    /// Invalid path patterns are logged and converted into a filter that never matches.
+    /// Use [`Router::try_path`] to handle malformed patterns explicitly.
     #[inline]
     #[must_use]
     pub fn path(self, path: impl Into<String>) -> Self {
         self.filter(PathFilter::new(path))
+    }
+
+    /// Try creating a new path filter for current router.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path pattern is malformed.
+    #[inline]
+    pub fn try_path(self, path: impl Into<String>) -> Result<Self, String> {
+        Ok(self.filter(PathFilter::try_new(path)?))
     }
 
     /// Create a new router and set filter.

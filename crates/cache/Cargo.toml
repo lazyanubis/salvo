@@ -28,6 +28,7 @@ worker-store = ["dep:worker"]
 bytes = { workspace = true }
 moka = { workspace = true, optional = true, features = ["future"] }
 salvo_core = { workspace = true, features = ["http1"] }
+tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 
 time = { workspace = true }
@@ -42,7 +43,7 @@ worker = { workspace = true, optional = true }
 
 [dev-dependencies]
 salvo_core = { workspace = true, features = ["test"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 time = { workspace = true }
 
 [lints]
