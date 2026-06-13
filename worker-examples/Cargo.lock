@@ -1509,13 +1509,12 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.95"
+version = "0.3.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2964e92d1d9dc3364cae4d718d93f227e3abb088e747d92e0395bfdedf1c12ca"
+checksum = "03d04c30968dffe80775bd4d7fb676131cd04a1fb46d2686dbffbaec2d9dfd31"
 dependencies = [
  "cfg-if",
  "futures-util",
- "once_cell",
  "wasm-bindgen",
 ]
 
@@ -2189,7 +2188,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams",
+ "wasm-streams 0.5.0",
  "web-sys",
 ]
 
@@ -2376,7 +2375,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "salvo-cache"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "bytes",
  "ciborium",
@@ -2392,7 +2391,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-cors"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "bytes",
  "salvo_core",
@@ -2401,7 +2400,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-csrf"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -2423,7 +2422,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-flash"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "salvo-session",
  "salvo_core",
@@ -2434,7 +2433,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-oapi"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -2467,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-oapi-macros"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2480,7 +2479,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-proxy"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "bytes",
  "fastrand",
@@ -2498,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-rate-limiter"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "ciborium",
  "salvo_core",
@@ -2511,7 +2510,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-serde-util"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2520,7 +2519,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-session"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "cookie",
  "getrandom 0.2.17",
@@ -2534,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-worker"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "bytes",
  "futures",
@@ -2563,7 +2562,7 @@ dependencies = [
 
 [[package]]
 name = "salvo_core"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -2611,7 +2610,7 @@ dependencies = [
 
 [[package]]
 name = "salvo_extra"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "base64",
  "etag",
@@ -2626,7 +2625,7 @@ dependencies = [
 
 [[package]]
 name = "salvo_macros"
-version = "0.91.1"
+version = "0.92.2"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3089,9 +3088,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.51.1"
+version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f66bf9585cda4b724d3e78ab34b73fb2bbaba9011b9bfdf69dc836382ea13b8c"
+checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
 dependencies = [
  "bytes",
  "libc",
@@ -3443,9 +3442,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.118"
+version = "0.2.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bf938a0bacb0469e83c1e148908bd7d5a6010354cf4fb73279b7447422e3a89"
+checksum = "8ddb3f79143bced6de84270411622a2699cee572fc0875aeaf1e7867cf9fca1a"
 dependencies = [
  "cfg-if",
  "once_cell",
@@ -3456,9 +3455,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.68"
+version = "0.4.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f371d383f2fb139252e0bfac3b81b265689bf45b6874af544ffa4c975ac1ebf8"
+checksum = "503b14d284f2c8dac03b819967e155ea753f573586193b2b2c95990cb5d69280"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -3466,9 +3465,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.118"
+version = "0.2.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eeff24f84126c0ec2db7a449f0c2ec963c6a49efe0698c4242929da037ca28ed"
+checksum = "4e21a184b13fb19e157296e2c46056aec9092264fab83e4ba59e68c61b323c3d"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -3476,9 +3475,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.118"
+version = "0.2.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d08065faf983b2b80a79fd87d8254c409281cf7de75fc4b773019824196c904"
+checksum = "fecefd9c35bd935a20fc3fc344b5f29138961e4f47fb03297d88f2587afb5ebd"
 dependencies = [
  "bumpalo",
  "proc-macro2",
@@ -3489,9 +3488,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.118"
+version = "0.2.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fd04d9e306f1907bd13c6361b5c6bfc7b3b3c095ed3f8a9246390f8dbdee129"
+checksum = "23939e44bb9a5d7576fa2b563dc2e136628f1224e88a8deed09e04858b77871f"
 dependencies = [
  "unicode-ident",
 ]
@@ -3532,6 +3531,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-streams"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7d3be8814f5ba5f074491a469eed3d73c273ffad955f25ed1635efac4b0d269"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "wasmparser"
 version = "0.244.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3545,9 +3557,9 @@ dependencies = [
 
 [[package]]
 name = "web-sys"
-version = "0.3.95"
+version = "0.3.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f2dfbb17949fa2088e5d39408c48368947b86f7834484e87b73de55bc14d97d"
+checksum = "a6430a72df5eb332242960fe84b3002a241163998241eb596d4f739b9757061d"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -3812,9 +3824,9 @@ dependencies = [
 
 [[package]]
 name = "worker"
-version = "0.8.0"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60d64fc6b9a9312fb2432adcc0f1432c033c790dee54bf55523854d91e1314c9"
+checksum = "2f8adbf6c9ae45b665dee995c5e3a342c2bd7d58a2e8ca5c75b50ce8b1b8bfd9"
 dependencies = [
  "async-trait",
  "axum",
@@ -3831,11 +3843,12 @@ dependencies = [
  "serde-wasm-bindgen",
  "serde_json",
  "serde_urlencoded",
+ "strum",
  "tokio",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams",
+ "wasm-streams 0.6.0",
  "web-sys",
  "worker-macros",
  "worker-sys",
@@ -3843,9 +3856,9 @@ dependencies = [
 
 [[package]]
 name = "worker-macros"
-version = "0.8.0"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d90009686c58eb2c34d1c5b80f04a335021b28742b7a52ea833a62c7e21baa25"
+checksum = "6d908735d273dd7f9c325a842623f4e5a745e0686187ce465b34dc162ad348df"
 dependencies = [
  "async-trait",
  "proc-macro2",
@@ -3853,16 +3866,15 @@ dependencies = [
  "strum",
  "syn 2.0.117",
  "wasm-bindgen",
- "wasm-bindgen-futures",
  "wasm-bindgen-macro-support",
  "worker-sys",
 ]
 
 [[package]]
 name = "worker-sys"
-version = "0.8.0"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb85940169929c472a35338d81d4283c9a903cd3cf55331a5b87096adfae41b1"
+checksum = "33faa1a8fa6c7eec67b196e008859c44d468a5ad4f991855cdc856f119e0e98f"
 dependencies = [
  "cfg-if",
  "js-sys",
