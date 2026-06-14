@@ -162,7 +162,7 @@ pub struct Catcher {
     hoops: Vec<Arc<dyn Handler>>,
 }
 impl Default for Catcher {
-    /// Create new `Catcher` with its goal handler is [`DefaultGoal`].
+    /// Creates a new `Catcher` with [`DefaultGoal`] as its handler.
     fn default() -> Self {
         Self {
             goal: Arc::new(DefaultGoal::new()),
@@ -204,9 +204,8 @@ impl Catcher {
         self
     }
 
-    /// Add a handler as middleware, it will run the handler when error caught.
-    ///
-    /// This middleware is only effective when the filter returns true..
+    /// Add a handler as middleware. It runs the handler when an error is caught,
+    /// but only when the filter returns `true`.
     #[inline]
     #[must_use]
     pub fn hoop_when<H, F>(mut self, hoop: H, filter: F) -> Self
@@ -230,8 +229,8 @@ impl Catcher {
 
 /// Default [`Handler`] used as goal for [`Catcher`].
 ///
-/// If http status is error, and all custom handlers is not catch it and write body,
-/// `DefaultGoal` will used to catch them.
+/// If the HTTP status is an error, and no custom handler catches it or writes a body,
+/// `DefaultGoal` is used to handle it.
 ///
 /// `DefaultGoal` supports sending error pages in `XML`, `JSON`, `HTML`, `Text` formats.
 #[derive(Default, Debug)]
@@ -502,10 +501,11 @@ pub fn write_error_default(req: &Request, res: &mut Response, footer: Option<&st
             footer,
         )
     };
-    res.headers_mut().insert(
-        header::CONTENT_TYPE,
-        format.to_string().parse().expect("invalid `Content-Type`"),
-    );
+    let content_type = format
+        .to_string()
+        .parse()
+        .unwrap_or_else(|_| header::HeaderValue::from_static("text/plain; charset=utf-8"));
+    res.headers_mut().insert(header::CONTENT_TYPE, content_type);
     let _ = res.write_body(data);
 }
 

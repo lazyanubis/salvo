@@ -42,15 +42,12 @@
 use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fmt::{self, Debug, Formatter};
-#[cfg(test)]
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use hyper::upgrade::OnUpgrade;
-#[cfg(not(test))]
-use local_ip_address::{local_ip, local_ipv6};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
-use salvo_core::conn::SocketAddr;
-use salvo_core::http::header::{CONNECTION, HOST, HeaderMap, HeaderName, HeaderValue, UPGRADE};
+use salvo_core::http::header::{
+    AUTHORIZATION, CONNECTION, HOST, HeaderMap, HeaderName, HeaderValue, UPGRADE,
+};
 use salvo_core::http::uri::Uri;
 use salvo_core::http::{ReqBody, ResBody, StatusCode};
 use salvo_core::routing::normalize_url_path;
@@ -81,7 +78,7 @@ cfg_feature! {
 type HyperRequest = hyper::Request<ReqBody>;
 type HyperResponse = hyper::Response<ResBody>;
 
-const X_FORWARDER_FOR_HEADER_NAME: &str = "x-forwarded-for";
+const X_FORWARDED_FOR_HEADER_NAME: &str = "x-forwarded-for";
 const HOP_BY_HOP_HEADERS: &[&str] = &[
     "connection",
     "keep-alive",
@@ -107,13 +104,32 @@ const PATH_ENCODE_SET: &AsciiSet = &QUERY_ENCODE_SET
     .add(b'{')
     .add(b'}');
 
-/// Encode url path. This can be used when build your custom url path getter.
+/// Encode URL path. This can be used when building a custom URL path getter.
+///
+/// Walks the segments separated by `/` and percent-encodes each one in place using
+/// [`PATH_ENCODE_SET`], without allocating an intermediate `Vec<String>` or a
+/// `String` per segment.
 #[inline]
 pub(crate) fn encode_url_path(path: &str) -> String {
-    path.split('/')
-        .map(|s| utf8_percent_encode(s, PATH_ENCODE_SET).to_string())
-        .collect::<Vec<_>>()
-        .join("/")
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(path.len());
+    let mut first = true;
+    for segment in path.split('/') {
+        if first {
+            first = false;
+        } else {
+            out.push('/');
+        }
+        // `Display` for `PercentEncode` writes directly into the formatter, so this
+        // does not allocate a temporary `String` per segment.
+        let _ = write!(
+            &mut out,
+            "{}",
+            utf8_percent_encode(segment, PATH_ENCODE_SET)
+        );
+    }
+    out
 }
 
 /// Client trait for implementing different HTTP clients for proxying.
@@ -187,17 +203,17 @@ where
     }
 }
 
-/// Url part getter. You can use this to get the proxied url path or query.
+/// URL part getter. You can use this to get the proxied URL path or query.
 pub type UrlPartGetter = Box<dyn Fn(&Request, &Depot) -> Option<String> + Send + Sync + 'static>;
 
 /// Host header getter. You can use this to get the host header for the proxied request.
 pub type HostHeaderGetter =
     Box<dyn Fn(&Uri, &Request, &Depot) -> Option<String> + Send + Sync + 'static>;
 
-/// Default url path getter.
+/// Default URL path getter.
 ///
-/// This getter will get the last param as the rest url path from request.
-/// In most case you should use wildcard param, like `{**rest}`, `{*+rest}`.
+/// This getter gets the last param as the rest URL path from the request.
+/// In most cases you should use a wildcard param, like `{**rest}`, `{*+rest}`.
 pub fn default_url_path_getter(req: &Request, _depot: &Depot) -> Option<String> {
     req.params().tail().map(str::to_owned)
 }
@@ -206,17 +222,16 @@ fn contains_ambiguous_path_escape(path: &str) -> bool {
     let bytes = path.as_bytes();
     let mut index = 0;
     while index + 2 < bytes.len() {
-        if bytes[index] == b'%' {
-            if let (Some(high), Some(low)) =
+        if bytes[index] == b'%'
+            && let (Some(high), Some(low)) =
                 (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-            {
-                let decoded = high << 4 | low;
-                if matches!(decoded, b'.' | b'/' | b'\\' | b'%') {
-                    return true;
-                }
-                index += 3;
-                continue;
+        {
+            let decoded = high << 4 | low;
+            if matches!(decoded, b'.' | b'/' | b'\\' | b'%') {
+                return true;
             }
+            index += 3;
+            continue;
         }
         index += 1;
     }
@@ -231,12 +246,12 @@ fn hex_value(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-/// Default url query getter. This getter just return the query string from request uri.
+/// Default URL query getter. This getter returns the query string from the request URI.
 pub fn default_url_query_getter(req: &Request, _depot: &Depot) -> Option<String> {
     req.uri().query().map(Into::into)
 }
 
-/// Default host header getter. This getter will get the host header from request uri
+/// Default host header getter. This getter gets the host header from the request URI.
 pub fn default_host_header_getter(
     forward_uri: &Uri,
     _req: &Request,
@@ -249,9 +264,12 @@ pub fn default_host_header_getter(
     None
 }
 
-/// RFC2616 complieant host header getter. This getter will get the host header from request uri,
-/// and add port if it's not default port. Falls back to default upon any forward URI parse error.
-pub fn rfc2616_host_header_getter(
+/// Standards-compliant host header getter.
+///
+/// This getter gets the host header from the request URI and adds the port when it is not the
+/// default port for the scheme. This follows the Host header behavior specified by modern HTTP
+/// semantics (RFC 7230 and RFC 9110).
+pub fn standard_host_header_getter(
     forward_uri: &Uri,
     req: &Request,
     _depot: &Depot,
@@ -303,9 +321,9 @@ where
     pub upstreams: U,
     /// [`Client`] for proxy.
     pub client: C,
-    /// Url path getter.
+    /// URL path getter.
     pub url_path_getter: UrlPartGetter,
-    /// Url query getter.
+    /// URL query getter.
     pub url_query_getter: UrlPartGetter,
     /// Host header getter
     pub host_header_getter: HostHeaderGetter,
@@ -313,6 +331,8 @@ where
     pub client_ip_forwarding_enabled: bool,
     /// Flag to reject ambiguous percent-encoded path characters before proxying.
     pub strict_path_normalization_enabled: bool,
+    /// Flag to drop the inbound `Authorization` header before forwarding.
+    pub strip_authorization_header_enabled: bool,
 }
 
 impl<U, C> Debug for Proxy<U, C>
@@ -321,7 +341,20 @@ where
     C: Client,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Proxy").finish()
+        f.debug_struct("Proxy")
+            .field(
+                "client_ip_forwarding_enabled",
+                &self.client_ip_forwarding_enabled,
+            )
+            .field(
+                "strict_path_normalization_enabled",
+                &self.strict_path_normalization_enabled,
+            )
+            .field(
+                "strip_authorization_header_enabled",
+                &self.strip_authorization_header_enabled,
+            )
+            .finish_non_exhaustive()
     }
 }
 
@@ -341,7 +374,8 @@ where
             url_query_getter: Box::new(default_url_query_getter),
             host_header_getter: Box::new(default_host_header_getter),
             client_ip_forwarding_enabled: false,
-            strict_path_normalization_enabled: false,
+            strict_path_normalization_enabled: true,
+            strip_authorization_header_enabled: false,
         }
     }
 
@@ -354,11 +388,12 @@ where
             url_query_getter: Box::new(default_url_query_getter),
             host_header_getter: Box::new(default_host_header_getter),
             client_ip_forwarding_enabled: true,
-            strict_path_normalization_enabled: false,
+            strict_path_normalization_enabled: true,
+            strip_authorization_header_enabled: false,
         }
     }
 
-    /// Set url path getter.
+    /// Set URL path getter.
     #[inline]
     #[must_use]
     pub fn url_path_getter<G>(mut self, url_path_getter: G) -> Self
@@ -369,7 +404,7 @@ where
         self
     }
 
-    /// Set url query getter.
+    /// Set URL query getter.
     #[inline]
     #[must_use]
     pub fn url_query_getter<G>(mut self, url_query_getter: G) -> Self
@@ -380,7 +415,7 @@ where
         self
     }
 
-    /// Set host header query getter.
+    /// Set host header getter.
     #[inline]
     #[must_use]
     pub fn host_header_getter<G>(mut self, host_header_getter: G) -> Self
@@ -434,6 +469,22 @@ where
         self
     }
 
+    /// Drop the inbound `Authorization` header before forwarding the
+    /// request upstream.
+    ///
+    /// Disabled by default to preserve the typical reverse-proxy
+    /// pass-through behaviour. Enable this when the proxy sits in
+    /// front of services that should not see the caller's credentials
+    /// — for example a public CORS gateway, a third-party API
+    /// bridge, or any deployment where the upstream is in a different
+    /// trust domain than the inbound client.
+    #[inline]
+    #[must_use]
+    pub fn strip_authorization_header(mut self, enable: bool) -> Self {
+        self.strip_authorization_header_enabled = enable;
+        self
+    }
+
     async fn build_proxied_request(
         &self,
         req: &mut Request,
@@ -481,9 +532,13 @@ where
         let connection_headers = connection_header_names(req.headers());
         let upgrade_type = get_upgrade_type(req.headers()).map(str::to_owned);
         for (key, value) in req.headers() {
-            if key != HOST && !is_hop_by_hop_header(key, &connection_headers) {
-                build = build.header(key, value);
+            if key == HOST || is_hop_by_hop_header(key, &connection_headers) {
+                continue;
             }
+            if self.strip_authorization_header_enabled && key == AUTHORIZATION {
+                continue;
+            }
+            build = build.header(key, value);
         }
         if let Some(upgrade_type) = upgrade_type {
             build = build.header(CONNECTION, HeaderValue::from_static("upgrade"));
@@ -508,49 +563,17 @@ where
         }
 
         if self.client_ip_forwarding_enabled {
-            let xff_header_name = HeaderName::from_static(X_FORWARDER_FOR_HEADER_NAME);
-            let current_xff = req.headers().get(&xff_header_name);
-
-            #[cfg(test)]
-            let system_ip_addr = match req.remote_addr() {
-                SocketAddr::IPv6(_) => Some(IpAddr::from(Ipv6Addr::new(
-                    0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8,
-                ))),
-                _ => Some(IpAddr::from(Ipv4Addr::new(101, 102, 103, 104))),
-            };
-
-            #[cfg(not(test))]
-            let system_ip_addr = match req.remote_addr() {
-                SocketAddr::IPv6(_) => local_ipv6().ok(),
-                _ => local_ip().ok(),
-            };
-
-            if let Some(system_ip_addr) = system_ip_addr {
-                let forwarded_addr = system_ip_addr.to_string();
-
-                let xff_value = match current_xff {
-                    Some(current_xff) => match current_xff.to_str() {
-                        Ok(current_xff) => format!("{forwarded_addr}, {current_xff}"),
-                        _ => forwarded_addr.clone(),
-                    },
-                    None => forwarded_addr.clone(),
-                };
-
-                let xff_header_halue = match HeaderValue::from_str(xff_value.as_str()) {
-                    Ok(xff_header_halue) => Some(xff_header_halue),
-                    Err(_) => match HeaderValue::from_str(forwarded_addr.as_str()) {
-                        Ok(xff_header_halue) => Some(xff_header_halue),
-                        Err(e) => {
-                            tracing::error!(error = ?e, "invalid x-forwarded-for header value");
-                            None
+            let xff_header_name = HeaderName::from_static(X_FORWARDED_FOR_HEADER_NAME);
+            if let Some(client_ip) = req.remote_addr().ip() {
+                match HeaderValue::from_str(&client_ip.to_string()) {
+                    Ok(xff) => {
+                        if let Some(headers) = build.headers_mut() {
+                            headers.insert(&xff_header_name, xff);
                         }
-                    },
-                };
-
-                if let Some(xff) = xff_header_halue
-                    && let Some(headers) = build.headers_mut()
-                {
-                    headers.insert(&xff_header_name, xff);
+                    }
+                    Err(e) => {
+                        tracing::error!(error = ?e, "invalid x-forwarded-for header value");
+                    }
                 }
             }
         }
@@ -592,11 +615,7 @@ where
                             body,
                         ) = response.into_parts();
                         res.status_code(status);
-                        for name in headers.keys() {
-                            for value in headers.get_all(name) {
-                                res.headers.append(name, value.to_owned());
-                            }
-                        }
+                        append_end_to_end_headers(res.headers_mut(), &headers, status);
                         res.body(body);
                     }
                     Err(e) => {
@@ -630,12 +649,37 @@ fn is_hop_by_hop_header(name: &HeaderName, connection_headers: &[HeaderName]) ->
         || connection_headers.iter().any(|header| header == name)
 }
 
+fn append_end_to_end_headers(destination: &mut HeaderMap, source: &HeaderMap, status: StatusCode) {
+    let connection_headers = connection_header_names(source);
+    let upgrade_type = if status == StatusCode::SWITCHING_PROTOCOLS {
+        get_upgrade_type(source).map(str::to_owned)
+    } else {
+        None
+    };
+    for name in source.keys() {
+        if is_hop_by_hop_header(name, &connection_headers) {
+            continue;
+        }
+        for value in source.get_all(name) {
+            destination.append(name, value.to_owned());
+        }
+    }
+    if let Some(upgrade_type) = upgrade_type {
+        destination.append(CONNECTION, HeaderValue::from_static("upgrade"));
+        match HeaderValue::from_str(&upgrade_type) {
+            Ok(upgrade_type) => {
+                destination.append(UPGRADE, upgrade_type);
+            }
+            Err(e) => {
+                tracing::error!(error = ?e, "invalid upgrade header value");
+            }
+        }
+    }
+}
+
 #[inline]
-#[allow(dead_code)]
 fn get_upgrade_type(headers: &HeaderMap) -> Option<&str> {
-    if connection_header_names(headers)
-        .iter()
-        .any(|name| name == UPGRADE)
+    if connection_header_names(headers).contains(&UPGRADE)
         && let Some(upgrade_value) = headers.get(&UPGRADE)
     {
         tracing::debug!(
@@ -648,6 +692,23 @@ fn get_upgrade_type(headers: &HeaderMap) -> Option<&str> {
     None
 }
 
+/// Compare two `Upgrade` token candidates from request and response.
+///
+/// Per RFC 7230 §6.7 the upgrade token is case-insensitive (`websocket`,
+/// `WebSocket`, `WEBSOCKET` are equivalent), so this helper compares with
+/// `eq_ignore_ascii_case`. Two missing tokens compare equal (the previous
+/// case-sensitive check matched too) so callers behave the same when neither
+/// side advertises an upgrade.
+#[allow(unused)]
+#[inline]
+pub(crate) fn upgrade_types_match(request: Option<&str>, response: Option<&str>) -> bool {
+    match (request, response) {
+        (Some(req), Some(resp)) => req.eq_ignore_ascii_case(resp),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 // Unit tests for Proxy
 #[cfg(test)]
 mod tests {
@@ -656,7 +717,7 @@ mod tests {
     use std::str::FromStr;
 
     use futures_util::{SinkExt, StreamExt};
-    use salvo_core::conn::{Acceptor, Listener};
+    use salvo_core::conn::{Acceptor, Listener, SocketAddr};
     use salvo_core::prelude::{Router, Server, StatusError, TcpListener, handler};
     use salvo_extra::websocket::WebSocketUpgrade;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -699,6 +760,34 @@ mod tests {
         let path = "/test/path";
         let encoded_path = encode_url_path(path);
         assert_eq!(encoded_path, "/test/path");
+    }
+
+    #[test]
+    fn test_upgrade_types_match_is_case_insensitive() {
+        // RFC 7230 §6.7 — upgrade tokens are case-insensitive.
+        assert!(upgrade_types_match(Some("WebSocket"), Some("websocket")));
+        assert!(upgrade_types_match(Some("WEBSOCKET"), Some("WebSocket")));
+        assert!(upgrade_types_match(Some("h2c"), Some("h2c")));
+        assert!(upgrade_types_match(None, None));
+
+        assert!(!upgrade_types_match(Some("websocket"), Some("h2c")));
+        assert!(!upgrade_types_match(Some("websocket"), None));
+        assert!(!upgrade_types_match(None, Some("websocket")));
+    }
+
+    #[test]
+    fn test_encode_url_path_preserves_segments_and_escapes_unsafe_chars() {
+        // Empty input round-trips.
+        assert_eq!(encode_url_path(""), "");
+
+        // Leading and trailing slashes survive (they become empty segments).
+        assert_eq!(encode_url_path("/"), "/");
+        assert_eq!(encode_url_path("//a//b//"), "//a//b//");
+
+        // Unsafe path characters in `PATH_ENCODE_SET` get percent-encoded per
+        // segment; the slash separator itself is left intact.
+        assert_eq!(encode_url_path("a b/c d"), "a%20b/c%20d");
+        assert_eq!(encode_url_path("a/{b}/c"), "a/%7Bb%7D/c");
     }
 
     #[test]
@@ -772,26 +861,26 @@ mod tests {
 
         let uri_with_port = Uri::from_str("http://host.tld:8080/test").unwrap();
         assert_eq!(
-            rfc2616_host_header_getter(&uri_with_port, &req, &depot),
+            standard_host_header_getter(&uri_with_port, &req, &depot),
             Some("host.tld:8080".to_owned())
         );
 
         let uri_with_http_port = Uri::from_str("http://host.tld:80/test").unwrap();
         assert_eq!(
-            rfc2616_host_header_getter(&uri_with_http_port, &req, &depot),
+            standard_host_header_getter(&uri_with_http_port, &req, &depot),
             Some("host.tld".to_owned())
         );
 
         let uri_with_https_port = Uri::from_str("https://host.tld:443/test").unwrap();
         assert_eq!(
-            rfc2616_host_header_getter(&uri_with_https_port, &req, &depot),
+            standard_host_header_getter(&uri_with_https_port, &req, &depot),
             Some("host.tld".to_owned())
         );
 
         let uri_with_non_https_scheme_and_https_port =
             Uri::from_str("http://host.tld:443/test").unwrap();
         assert_eq!(
-            rfc2616_host_header_getter(&uri_with_non_https_scheme_and_https_port, &req, &depot),
+            standard_host_header_getter(&uri_with_non_https_scheme_and_https_port, &req, &depot),
             Some("host.tld:443".to_owned())
         );
 
@@ -912,6 +1001,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_build_proxied_request_forwards_authorization_by_default() {
+        let proxy = Proxy::new(vec!["http://example.com"], HyperClient::default());
+        let mut request = Request::new();
+        let depot = Depot::new();
+
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+
+        let proxied = proxy
+            .build_proxied_request(&mut request, &depot)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            proxied.headers().get(AUTHORIZATION),
+            Some(&HeaderValue::from_static("Bearer secret"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_proxied_request_strips_authorization_when_enabled() {
+        let proxy = Proxy::new(vec!["http://example.com"], HyperClient::default())
+            .strip_authorization_header(true);
+        let mut request = Request::new();
+        let depot = Depot::new();
+
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        request.headers_mut().insert(
+            HeaderName::from_static("x-keep"),
+            HeaderValue::from_static("ok"),
+        );
+
+        let proxied = proxy
+            .build_proxied_request(&mut request, &depot)
+            .await
+            .unwrap();
+
+        assert!(proxied.headers().get(AUTHORIZATION).is_none());
+        assert_eq!(
+            proxied.headers().get(HeaderName::from_static("x-keep")),
+            Some(&HeaderValue::from_static("ok"))
+        );
+    }
+
+    #[tokio::test]
     async fn test_proxy_websocket_connection_with_split_connection_headers() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -957,6 +1094,15 @@ Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
             response_head.starts_with("HTTP/1.1 101"),
             "unexpected websocket handshake response: {response_head}"
         );
+        let response_head_lower = response_head.to_ascii_lowercase();
+        assert!(
+            response_head_lower.contains("\r\nconnection: upgrade\r\n"),
+            "missing connection upgrade header: {response_head}"
+        );
+        assert!(
+            response_head_lower.contains("\r\nupgrade: websocket\r\n"),
+            "missing upgrade header: {response_head}"
+        );
 
         let mut websocket = tokio_tungstenite::WebSocketStream::from_partially_read(
             stream,
@@ -980,7 +1126,7 @@ Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
 
     #[tokio::test]
     async fn test_client_ip_forwarding() {
-        let xff_header_name = HeaderName::from_static(X_FORWARDER_FOR_HEADER_NAME);
+        let xff_header_name = HeaderName::from_static(X_FORWARDED_FOR_HEADER_NAME);
 
         let mut request = Request::new();
         let depot = Depot::new();
@@ -1000,21 +1146,29 @@ Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
         assert!(proxy.client_ip_forwarding_enabled);
 
         match proxy.build_proxied_request(&mut request, &depot).await {
+            Ok(req) => assert!(req.headers().get(&xff_header_name).is_none()),
+            _ => panic!("expected Ok"),
+        }
+
+        *request.remote_addr_mut() =
+            SocketAddr::from(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 12345));
+
+        match proxy.build_proxied_request(&mut request, &depot).await {
             Ok(req) => assert_eq!(
                 req.headers().get(&xff_header_name),
-                Some(&HeaderValue::from_static("101.102.103.104"))
+                Some(&HeaderValue::from_static("127.0.0.1"))
             ),
             _ => panic!("expected Ok"),
         }
 
-        // Test choosing correct IP version depending on remote address
+        // Test choosing correct IP version depending on remote address.
         *request.remote_addr_mut() =
             SocketAddr::from(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 12345, 0, 0));
 
         match proxy.build_proxied_request(&mut request, &depot).await {
             Ok(req) => assert_eq!(
                 req.headers().get(&xff_header_name),
-                Some(&HeaderValue::from_static("1:2:3:4:5:6:7:8"))
+                Some(&HeaderValue::from_static("::1"))
             ),
             _ => panic!("expected Ok"),
         }
@@ -1022,14 +1176,11 @@ Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
         *request.remote_addr_mut() = SocketAddr::Unknown;
 
         match proxy.build_proxied_request(&mut request, &depot).await {
-            Ok(req) => assert_eq!(
-                req.headers().get(&xff_header_name),
-                Some(&HeaderValue::from_static("101.102.103.104"))
-            ),
+            Ok(req) => assert!(req.headers().get(&xff_header_name).is_none()),
             _ => panic!("expected Ok"),
         }
 
-        // Test IP prepending when XFF header already exists in initial request.
+        // Test incoming XFF is overwritten instead of preserving untrusted client input.
         request.headers_mut().insert(
             &xff_header_name,
             HeaderValue::from_static("10.72.0.1, 127.0.0.1"),
@@ -1040,9 +1191,7 @@ Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
         match proxy.build_proxied_request(&mut request, &depot).await {
             Ok(req) => assert_eq!(
                 req.headers().get(&xff_header_name),
-                Some(&HeaderValue::from_static(
-                    "101.102.103.104, 10.72.0.1, 127.0.0.1"
-                ))
+                Some(&HeaderValue::from_static("127.0.0.1"))
             ),
             _ => panic!("expected Ok"),
         }
@@ -1084,13 +1233,31 @@ Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
     }
 
     #[tokio::test]
-    async fn test_build_proxied_request_preserves_encoded_tail_by_default() {
+    async fn test_build_proxied_request_rejects_ambiguous_encoded_tail_by_default() {
         let mut request = Request::new();
         request
             .params_mut()
             .insert("**rest", "%2e%2e/secrets/.env".to_owned());
         let depot = Depot::new();
         let proxy = Proxy::new(vec!["http://example.com/api"], HyperClient::default());
+
+        assert!(
+            proxy
+                .build_proxied_request(&mut request, &depot)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_proxied_request_can_opt_out_of_strict_path_normalization() {
+        let mut request = Request::new();
+        request
+            .params_mut()
+            .insert("**rest", "%2e%2e/secrets/.env".to_owned());
+        let depot = Depot::new();
+        let proxy = Proxy::new(vec!["http://example.com/api"], HyperClient::default())
+            .strict_path_normalization(false);
 
         let proxied_request = proxy
             .build_proxied_request(&mut request, &depot)
@@ -1113,11 +1280,94 @@ Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
             let mut request = Request::new();
             request.params_mut().insert("**rest", path.to_owned());
             let depot = Depot::new();
-            let proxy = Proxy::new(vec!["http://example.com/api"], HyperClient::default())
-                .strict_path_normalization(true);
+            let proxy = Proxy::new(vec!["http://example.com/api"], HyperClient::default());
 
             let err = proxy.build_proxied_request(&mut request, &depot).await;
             assert!(err.is_err(), "path should be rejected: {path}");
         }
+    }
+
+    #[test]
+    fn test_append_end_to_end_headers_strips_response_hop_by_hop_headers() {
+        let mut source = HeaderMap::new();
+        source.insert(CONNECTION, HeaderValue::from_static("x-remove"));
+        source.insert(UPGRADE, HeaderValue::from_static("websocket"));
+        source.insert(
+            HeaderName::from_static("transfer-encoding"),
+            HeaderValue::from_static("chunked"),
+        );
+        source.insert(
+            HeaderName::from_static("x-remove"),
+            HeaderValue::from_static("secret"),
+        );
+        source.insert(
+            HeaderName::from_static("x-keep"),
+            HeaderValue::from_static("ok"),
+        );
+
+        let mut destination = HeaderMap::new();
+        append_end_to_end_headers(&mut destination, &source, StatusCode::OK);
+
+        assert!(destination.get(CONNECTION).is_none());
+        assert!(destination.get(UPGRADE).is_none());
+        assert!(
+            destination
+                .get(HeaderName::from_static("transfer-encoding"))
+                .is_none()
+        );
+        assert!(
+            destination
+                .get(HeaderName::from_static("x-remove"))
+                .is_none()
+        );
+        assert_eq!(
+            destination.get(HeaderName::from_static("x-keep")),
+            Some(&HeaderValue::from_static("ok"))
+        );
+    }
+
+    #[test]
+    fn test_append_end_to_end_headers_preserves_upgrade_handshake_on_101() {
+        let mut source = HeaderMap::new();
+        source.insert(CONNECTION, HeaderValue::from_static("Upgrade, x-remove"));
+        source.insert(UPGRADE, HeaderValue::from_static("websocket"));
+        source.insert(
+            HeaderName::from_static("transfer-encoding"),
+            HeaderValue::from_static("chunked"),
+        );
+        source.insert(
+            HeaderName::from_static("x-remove"),
+            HeaderValue::from_static("secret"),
+        );
+        source.insert(
+            HeaderName::from_static("x-keep"),
+            HeaderValue::from_static("ok"),
+        );
+
+        let mut destination = HeaderMap::new();
+        append_end_to_end_headers(&mut destination, &source, StatusCode::SWITCHING_PROTOCOLS);
+
+        assert_eq!(
+            destination.get(CONNECTION),
+            Some(&HeaderValue::from_static("upgrade"))
+        );
+        assert_eq!(
+            destination.get(UPGRADE),
+            Some(&HeaderValue::from_static("websocket"))
+        );
+        assert!(
+            destination
+                .get(HeaderName::from_static("transfer-encoding"))
+                .is_none()
+        );
+        assert!(
+            destination
+                .get(HeaderName::from_static("x-remove"))
+                .is_none()
+        );
+        assert_eq!(
+            destination.get(HeaderName::from_static("x-keep")),
+            Some(&HeaderValue::from_static("ok"))
+        );
     }
 }

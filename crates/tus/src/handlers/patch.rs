@@ -20,7 +20,7 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let store = &state.store;
     apply_common_headers(req, opts, &mut res.headers);
 
-    let id = match opts.get_file_id_from_request(req) {
+    let id = match opts.extract_file_id_from_request(req) {
         Ok(id) => id,
         Err(e) => {
             res.status_code = Some(e.status());
@@ -70,7 +70,7 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         on_incoming_request(req, id.clone()).await;
     }
 
-    let max_file_size = opts.get_configured_max_size(req, Some(id.to_owned())).await;
+    let max_file_size = opts.get_configured_max_size(req, Some(id.clone())).await;
     let _lock = match opts
         .acquire_write_lock(req, &id, CancellationContext::new())
         .await
@@ -133,19 +133,18 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     }
 
     if let Some(raw_length) = req.headers().get(H_UPLOAD_LENGTH) {
-        let size = match raw_length.to_str() {
-            Ok(value) => match parse_u64(Some(value), H_UPLOAD_LENGTH) {
+        let size = if let Ok(value) = raw_length.to_str() {
+            match parse_u64(Some(value), H_UPLOAD_LENGTH) {
                 Ok(size) => size,
                 Err(e) => {
                     res.status_code = Some(TusError::Protocol(e).status());
                     return;
                 }
-            },
-            Err(_) => {
-                res.status_code =
-                    Some(TusError::Protocol(ProtocolError::InvalidInt(H_UPLOAD_LENGTH)).status());
-                return;
             }
+        } else {
+            res.status_code =
+                Some(TusError::Protocol(ProtocolError::InvalidInt(H_UPLOAD_LENGTH)).status());
+            return;
         };
 
         if !store.has_extension(Extension::CreationDeferLength) {
@@ -176,20 +175,21 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     }
 
     let content_length = match req.headers().get(H_CONTENT_LENGTH) {
-        Some(value) => match value.to_str() {
-            Ok(v) => match parse_u64(Some(v), H_CONTENT_LENGTH) {
-                Ok(size) => Some(size),
-                Err(e) => {
-                    res.status_code = Some(TusError::Protocol(e).status());
-                    return;
+        Some(value) => {
+            if let Ok(v) = value.to_str() {
+                match parse_u64(Some(v), H_CONTENT_LENGTH) {
+                    Ok(size) => Some(size),
+                    Err(e) => {
+                        res.status_code = Some(TusError::Protocol(e).status());
+                        return;
+                    }
                 }
-            },
-            Err(_) => {
+            } else {
                 res.status_code =
                     Some(TusError::Protocol(ProtocolError::InvalidInt(H_CONTENT_LENGTH)).status());
                 return;
             }
-        },
+        }
         None => None,
     };
 
@@ -212,7 +212,7 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let (Some(incoming), Some(max_allowed)) = (content_length, max_allowed) {
         let exceeds = offset
             .checked_add(incoming)
-            .map_or(true, |end| end > max_allowed);
+            .is_none_or(|end| end > max_allowed);
         if exceeds {
             res.status_code = Some(TusError::Protocol(ProtocolError::ErrMaxSizeExceeded).status());
             return;
@@ -246,10 +246,9 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 
         if !is_finished {
             let expires_value = expires_at.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
-            res.headers.insert(
-                H_UPLOAD_EXPIRES,
-                HeaderValue::from_str(&expires_value).unwrap(),
-            );
+            if let Ok(v) = HeaderValue::from_str(&expires_value) {
+                res.headers.insert(H_UPLOAD_EXPIRES, v);
+            }
         }
     }
 
@@ -258,12 +257,10 @@ async fn patch(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // The new offset MUST be the sum of the offset before the PATCH request and the number of bytes
     // received and processed or stored during the current PATCH request.
     res.status_code = Some(StatusCode::NO_CONTENT);
-    res.headers.insert(
-        H_UPLOAD_OFFSET,
-        HeaderValue::from_str(&new_offset.to_string()).unwrap(),
-    );
+    res.headers
+        .insert(H_UPLOAD_OFFSET, HeaderValue::from(new_offset));
 }
 
-pub fn patch_handler() -> Router {
+pub(crate) fn patch_handler() -> Router {
     Router::with_path("{id}").patch(patch)
 }

@@ -5,7 +5,7 @@ use salvo_core::Depot;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use super::{RateGuard, RateStore};
+use super::{RateGuard, RateLimitState, RateStore};
 
 /// A simple in-memory store for rate limiter.
 #[derive(Debug)]
@@ -97,6 +97,19 @@ where
         } else {
             Ok(refer.clone())
         }
+    }
+
+    async fn verify_guard(
+        &self,
+        depot: &Depot,
+        key: Self::Key,
+        refer: &Self::Guard,
+        quota: &<Self::Guard as RateGuard>::Quota,
+    ) -> Result<RateLimitState<Self::Guard>, Self::Error> {
+        let mut guard = self.get(depot, &key).await.unwrap_or_else(|| refer.clone());
+        let allowed = guard.verify(quota).await;
+        self.set(depot, key, guard.clone()).await?;
+        Ok(RateLimitState { allowed, guard })
     }
 
     async fn save_guard(

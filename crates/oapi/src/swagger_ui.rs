@@ -16,6 +16,8 @@ use salvo_core::routing::redirect_to_dir_url;
 use salvo_core::{Depot, Error, FlowCtrl, Handler, Request, Response, Router, async_trait};
 use serde::Serialize;
 
+use crate::html::{description_meta, escape_html, keywords_meta};
+
 #[derive(RustEmbed)]
 #[folder = "src/swagger_ui/v5.32.4"]
 struct SwaggerUiDist;
@@ -184,7 +186,7 @@ impl SwaggerUi {
         self
     }
 
-    /// Add oauth [`oauth::Config`] into [`SwaggerUi`].
+    /// Add OAuth [`oauth::Config`] into [`SwaggerUi`].
     ///
     /// Method takes one argument which exposes the [`oauth::Config`] to the user.
     ///
@@ -209,7 +211,7 @@ impl SwaggerUi {
         self
     }
 
-    /// Consusmes the [`SwaggerUi`] and returns [`Router`] with the [`SwaggerUi`] as handler.
+    /// Consumes the [`SwaggerUi`] and returns [`Router`] with the [`SwaggerUi`] as handler.
     pub fn into_router(self, path: impl Into<String>) -> Router {
         Router::with_path(format!("{}/{{**}}", path.into())).goal(self)
     }
@@ -235,17 +237,12 @@ impl Handler for SwaggerUi {
         let keywords = self
             .keywords
             .as_ref()
-            .map(|s| {
-                format!(
-                    "<meta name=\"keywords\" content=\"{}\">",
-                    s.split(',').map(|s| s.trim()).collect::<Vec<_>>().join(",")
-                )
-            })
+            .map(|s| keywords_meta(s))
             .unwrap_or_default();
         let description = self
             .description
             .as_ref()
-            .map(|s| format!("<meta name=\"description\" content=\"{s}\">"))
+            .map(|s| description_meta(s))
             .unwrap_or_default();
         let favicon_url = self
             .favicon_url
@@ -406,7 +403,7 @@ pub fn serve<'a>(
             .replacen("{{description}}", description, 1)
             .replacen("{{favicon_url}}", favicon_url, 1)
             .replacen("{{keywords}}", keywords, 1)
-            .replacen("{{title}}", title, 1);
+            .replacen("{{title}}", &escape_html(title), 1);
 
         if let Some(oauth) = &config.oauth {
             let oauth_json = serde_json::to_string(oauth)?;

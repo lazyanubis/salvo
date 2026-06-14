@@ -44,6 +44,9 @@ impl Paths {
         self.0
             .entry(key)
             .and_modify(|item| {
+                if value.ref_location.is_some() {
+                    item.ref_location = value.ref_location.take();
+                }
                 if value.summary.is_some() {
                     item.summary = value.summary.take();
                 }
@@ -87,6 +90,16 @@ impl Paths {
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PathItem {
+    /// External reference to a Path Item Object defined elsewhere.
+    ///
+    /// In OpenAPI 3.1 a Path Item Object can carry its own `$ref` field that delegates to
+    /// another Path Item definition. When set, sibling fields' behavior is undefined per
+    /// spec — most consumers resolve the reference and ignore them.
+    ///
+    /// See <https://spec.openapis.org/oas/v3.1.0#path-item-object>.
+    #[serde(rename = "$ref", skip_serializing_if = "Option::is_none", default)]
+    pub ref_location: Option<String>,
+
     /// Optional summary intended to apply all operations in this [`PathItem`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
@@ -98,19 +111,18 @@ pub struct PathItem {
 
     /// Alternative [`Server`] array to serve all [`Operation`]s in this [`PathItem`] overriding
     /// the global server array.
-    #[serde(skip_serializing_if = "Servers::is_empty")]
+    #[serde(skip_serializing_if = "Servers::is_empty", default)]
     pub servers: Servers,
 
     /// List of [`Parameter`]s common to all [`Operation`]s in this [`PathItem`]. Parameters cannot
     /// contain duplicate parameters. They can be overridden in [`Operation`] level but cannot be
     /// removed there.
-    #[serde(skip_serializing_if = "Parameters::is_empty")]
-    #[serde(flatten)]
+    #[serde(skip_serializing_if = "Parameters::is_empty", default)]
     pub parameters: Parameters,
 
     /// Map of operations in this [`PathItem`]. Operations can hold only one operation
     /// per [`PathItemType`].
-    #[serde(flatten)]
+    #[serde(flatten, default)]
     pub operations: Operations,
 
     /// Optional extensions "x-something"
@@ -128,6 +140,28 @@ impl PathItem {
             ..Default::default()
         }
     }
+
+    /// Construct a [`PathItem`] that is purely a reference to another Path Item, e.g. one
+    /// defined under `components.pathItems`.
+    ///
+    /// ```
+    /// # use salvo_oapi::PathItem;
+    /// let item = PathItem::from_ref("#/components/pathItems/PingWebhook");
+    /// ```
+    #[must_use]
+    pub fn from_ref<S: Into<String>>(ref_location: S) -> Self {
+        Self {
+            ref_location: Some(ref_location.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Set the `$ref` location for this [`PathItem`] and return `self`.
+    #[must_use]
+    pub fn ref_location<S: Into<String>>(mut self, ref_location: S) -> Self {
+        self.ref_location = Some(ref_location.into());
+        self
+    }
     /// Moves all elements from `other` into `self`, leaving `other` empty.
     ///
     /// If a key from `other` is already present in `self`, the respective
@@ -141,6 +175,9 @@ impl PathItem {
         }
         if other.summary.is_some() {
             self.summary = other.summary.take();
+        }
+        if other.ref_location.is_some() {
+            self.ref_location = other.ref_location.take();
         }
         other
             .extensions
@@ -199,6 +236,12 @@ impl PathItem {
 }
 
 /// Path item operation type.
+///
+/// Mirrors the HTTP methods supported by the OpenAPI 3.1 [Path Item Object][path_item];
+/// note that the spec deliberately does not list `CONNECT`, so it is intentionally absent
+/// here as well.
+///
+/// [path_item]: https://spec.openapis.org/oas/latest.html#path-item-object
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Clone, Copy, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum PathItemType {
@@ -218,8 +261,6 @@ pub enum PathItemType {
     Patch,
     /// Type mapping for HTTP _TRACE_ request.
     Trace,
-    /// Type mapping for HTTP _CONNECT_ request.
-    Connect,
 }
 
 #[cfg(test)]
@@ -248,6 +289,73 @@ mod tests {
                 }
             })
         )
+    }
+
+    #[test]
+    fn path_item_ref_serializes_as_dollar_ref() {
+        let item = PathItem::from_ref("#/components/pathItems/PingWebhook");
+        assert_json_eq!(
+            item,
+            json!({ "$ref": "#/components/pathItems/PingWebhook" })
+        );
+    }
+
+    #[test]
+    fn path_item_ref_round_trips_via_serde() {
+        let raw = json!({ "$ref": "#/components/pathItems/PingWebhook" });
+        let item: PathItem = serde_json::from_value(raw.clone()).expect("deserialize");
+        assert_eq!(
+            item.ref_location.as_deref(),
+            Some("#/components/pathItems/PingWebhook")
+        );
+        // Other fields are absent — sibling fields with $ref are spec-undefined, so we
+        // expect an otherwise empty PathItem.
+        assert!(item.summary.is_none());
+        assert!(item.operations.is_empty());
+
+        let reserialized = serde_json::to_value(&item).expect("serialize");
+        assert_eq!(reserialized, raw);
+    }
+
+    #[test]
+    fn path_item_ref_setter_overrides_plain_construction() {
+        let item = PathItem::new(PathItemType::Get, Operation::new())
+            .ref_location("#/components/pathItems/Other");
+
+        let value = serde_json::to_value(&item).expect("serialize");
+        assert_eq!(
+            value["$ref"],
+            json!("#/components/pathItems/Other"),
+            "$ref should serialize when set"
+        );
+        // The previously-attached operation is still there in this object form;
+        // consumers will resolve $ref and ignore siblings, but the type doesn't
+        // suppress them.
+        assert!(value.get("get").is_some());
+    }
+
+    #[test]
+    fn path_item_parameters_serialize_as_named_field() {
+        use crate::Parameter;
+
+        let path_item = PathItem::new(PathItemType::Get, Operation::new())
+            .parameters([Parameter::new("id").location(crate::ParameterIn::Path)]);
+
+        assert_json_eq!(
+            path_item,
+            json!({
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "get": {
+                    "responses": {}
+                }
+            })
+        );
     }
 
     #[test]

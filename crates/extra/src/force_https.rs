@@ -44,6 +44,7 @@
 //! ```
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Formatter};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use salvo_core::handler::Skipper;
 use salvo_core::http::header;
@@ -52,17 +53,22 @@ use salvo_core::http::{Request, ResBody, Response};
 use salvo_core::writing::Redirect;
 use salvo_core::{Depot, FlowCtrl, Handler, async_trait};
 
-/// Middleware for force redirect to http uri.
+/// Middleware that redirects HTTP requests to their HTTPS equivalent.
 #[derive(Default)]
 pub struct ForceHttps {
     https_port: Option<u16>,
+    canonical_host: Option<String>,
+    trust_host_header: bool,
     skipper: Option<Box<dyn Skipper>>,
+    no_op_warned: AtomicBool,
 }
 
 impl Debug for ForceHttps {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ForceHttps")
             .field("https_port", &self.https_port)
+            .field("canonical_host", &self.canonical_host)
+            .field("trust_host_header", &self.trust_host_header)
             .finish()
     }
 }
@@ -79,6 +85,28 @@ impl ForceHttps {
     pub fn https_port(self, port: u16) -> Self {
         Self {
             https_port: Some(port),
+            ..self
+        }
+    }
+
+    /// Specify the public host used in redirect locations.
+    #[must_use]
+    pub fn canonical_host(self, host: impl Into<String>) -> Self {
+        Self {
+            canonical_host: Some(host.into()),
+            ..self
+        }
+    }
+
+    /// Trust the request `Host`/`:authority` value when building redirect locations.
+    ///
+    /// Prefer [`ForceHttps::canonical_host`] for public services. Enable this
+    /// only when a trusted proxy or edge layer validates and overwrites host
+    /// headers before requests reach the application.
+    #[must_use]
+    pub fn trust_host_header(self, trust: bool) -> Self {
+        Self {
+            trust_host_header: trust,
             ..self
         }
     }
@@ -111,7 +139,35 @@ impl Handler for ForceHttps {
         {
             return;
         }
-        if let Some(host) = req.header::<String>(header::HOST) {
+        let redirect_base_host = if let Some(host) = self.canonical_host.as_deref() {
+            Some(Cow::Borrowed(host))
+        } else if self.trust_host_header {
+            // Prefer the `Host` header: that is what trusted proxies validate
+            // and rewrite. Falling back to `req.uri().authority()` first would
+            // let an HTTP/1.1 absolute-form request like
+            // `GET http://evil.example/ HTTP/1.1` bypass a validated Host
+            // value and steer the redirect target. Fall back to `:authority`
+            // only when no `Host` header is present (HTTP/2 deployments).
+            req.header::<String>(header::HOST)
+                .map(Cow::Owned)
+                .or_else(|| {
+                    req.uri()
+                        .authority()
+                        .map(|authority| Cow::Owned(authority.as_str().to_owned()))
+                })
+        } else {
+            if !self.no_op_warned.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "ForceHttps has neither `canonical_host(...)` nor `trust_host_header(true)` \
+                     configured; non-HTTPS requests will not be redirected. Set \
+                     `canonical_host(...)` for public services, or call `trust_host_header(true)` \
+                     only when a trusted proxy validates the Host/:authority header."
+                );
+            }
+            None
+        };
+
+        if let Some(host) = redirect_base_host {
             let host = redirect_host(&host, self.https_port);
             let uri_parts = std::mem::take(req.uri_mut()).into_parts();
             let mut builder = Uri::builder().scheme(Scheme::HTTPS).authority(&*host);
@@ -139,7 +195,7 @@ fn redirect_host(host: &str, https_port: Option<u16>) -> Cow<'_, str> {
 mod tests {
     use salvo_core::http::header::{HOST, LOCATION};
     use salvo_core::prelude::*;
-    use salvo_core::test::TestClient;
+    use salvo_core::test::{ResponseExt, TestClient};
 
     use super::*;
 
@@ -161,7 +217,9 @@ mod tests {
     }
     #[tokio::test]
     async fn test_redirect_handler() {
-        let router = Router::with_hoop(ForceHttps::new().https_port(1234)).goal(hello);
+        let router =
+            Router::with_hoop(ForceHttps::new().https_port(1234).trust_host_header(true))
+                .goal(hello);
         let response = TestClient::get("http://127.0.0.1:8698/")
             .add_header(HOST, "127.0.0.1:8698", true)
             .send(router)
@@ -170,6 +228,55 @@ mod tests {
         assert_eq!(
             response.headers().get(LOCATION),
             Some(&"https://127.0.0.1:1234/".parse().unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_redirect_handler_does_not_trust_host_by_default() {
+        let router = Router::with_hoop(ForceHttps::new()).goal(hello);
+        let mut response = TestClient::get("http://127.0.0.1:8698/")
+            .add_header(HOST, "attacker.example", true)
+            .send(router)
+            .await;
+
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.headers().get(LOCATION), None);
+        assert_eq!(response.take_string().await.unwrap(), "Hello World");
+    }
+
+    #[tokio::test]
+    async fn test_redirect_handler_prefers_host_over_uri_authority() {
+        // Simulate an HTTP/1.1 absolute-form request where the request-line
+        // authority points at an attacker-controlled host but the trusted
+        // proxy has validated/rewritten the `Host` header to a safe value.
+        // The redirect must follow the validated `Host`, not the URI.
+        let router =
+            Router::with_hoop(ForceHttps::new().trust_host_header(true)).goal(hello);
+        let response = TestClient::get("http://evil.example/")
+            .add_header(HOST, "public.example", true)
+            .send(router)
+            .await;
+
+        assert_eq!(response.status_code, Some(StatusCode::PERMANENT_REDIRECT));
+        assert_eq!(
+            response.headers().get(LOCATION),
+            Some(&"https://public.example/".parse().unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_redirect_handler_uses_canonical_host() {
+        let router = Router::with_hoop(ForceHttps::new().canonical_host("public.example.com"))
+            .goal(hello);
+        let response = TestClient::get("http://127.0.0.1:8698/")
+            .add_header(HOST, "attacker.example", true)
+            .send(router)
+            .await;
+
+        assert_eq!(response.status_code, Some(StatusCode::PERMANENT_REDIRECT));
+        assert_eq!(
+            response.headers().get(LOCATION),
+            Some(&"https://public.example.com/".parse().unwrap())
         );
     }
 }

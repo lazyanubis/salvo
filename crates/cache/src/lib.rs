@@ -74,7 +74,9 @@
 //!
 //! Concurrent misses for the same cache key are coalesced. One request populates
 //! the cache, and other in-flight requests reuse the generated cache entry when
-//! the response is cacheable.
+//! the response is cacheable. At most [`DEFAULT_MAX_IN_FLIGHT`] distinct cache
+//! keys are coalesced at once by default; additional misses bypass coalescing and
+//! execute normally until an in-flight slot is released.
 //!
 //! # Limitations
 //!
@@ -95,6 +97,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bytes::Bytes;
 use salvo_core::handler::Skipper;
+use salvo_core::http::header::{AUTHORIZATION, CACHE_CONTROL, COOKIE, SET_COOKIE, VARY};
 use salvo_core::http::{HeaderMap, ResBody, StatusCode};
 use salvo_core::{Depot, Error, FlowCtrl, Handler, Request, Response, async_trait};
 use tokio::sync::Notify;
@@ -119,11 +122,11 @@ cfg_feature! {
     pub use worker_store::{WorkerStore};
 }
 
-/// Issuer
+/// Issues a cache key for a request, deciding whether the request should be cached.
 pub trait CacheIssuer: Send + Sync + 'static {
-    /// The key is used to identify the rate limit.
+    /// The key type used to identify a cached entry.
     type Key: Hash + Eq + Send + Sync + 'static + AsRef<str>;
-    /// Issue a new key for the request. If it returns `None`, the request will not be cached.
+    /// Issue a key for the request. If it returns `None`, the request will not be cached.
     fn issue(
         &self,
         req: &mut Request,
@@ -141,7 +144,7 @@ where
     }
 }
 
-/// Identify user by Request Uri.
+/// Identify cacheable requests by their URI.
 #[derive(Clone, Debug)]
 pub struct RequestIssuer {
     use_scheme: bool,
@@ -259,15 +262,26 @@ fn mutex_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     }
 }
 
+/// Default maximum number of distinct cache keys tracked for concurrent miss coalescing.
+pub const DEFAULT_MAX_IN_FLIGHT: usize = 1024;
+
 struct InFlight<K> {
     entries: Mutex<HashMap<K, Arc<Flight>>>,
+    max_entries: usize,
+}
+
+impl<K> InFlight<K> {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+            max_entries,
+        }
+    }
 }
 
 impl<K> Default for InFlight<K> {
     fn default() -> Self {
-        Self {
-            entries: Mutex::new(HashMap::new()),
-        }
+        Self::new(DEFAULT_MAX_IN_FLIGHT)
     }
 }
 
@@ -279,6 +293,9 @@ where
         let mut entries = mutex_lock(&self.entries);
         if let Some(flight) = entries.get(&key) {
             return FlightPermit::Follower(flight.clone());
+        }
+        if entries.len() >= self.max_entries {
+            return FlightPermit::Bypass;
         }
 
         let flight = Arc::new(Flight::default());
@@ -312,6 +329,7 @@ where
 {
     Leader(FlightGuard<K>),
     Follower(Arc<Flight>),
+    Bypass,
 }
 
 struct FlightGuard<K>
@@ -486,6 +504,7 @@ where
     pub issuer: I,
     /// Skipper.
     pub skipper: Box<dyn Skipper>,
+    cache_private: bool,
     in_flight: Arc<InFlight<S::Key>>,
 }
 impl<S, I> Debug for Cache<S, I>
@@ -514,6 +533,7 @@ where
             store,
             issuer,
             skipper: Box::new(skipper),
+            cache_private: false,
             in_flight: Arc::new(InFlight::default()),
         }
     }
@@ -524,11 +544,34 @@ where
         self.skipper = Box::new(skipper);
         self
     }
+
+    /// Allow caching requests or responses that contain private-user cache signals.
+    ///
+    /// By default, requests with `Authorization` or `Cookie`, and responses with `Set-Cookie`,
+    /// `Vary`, or `Cache-Control: private/no-store`, are not cached.
+    #[inline]
+    #[must_use]
+    pub fn cache_private(mut self, cache_private: bool) -> Self {
+        self.cache_private = cache_private;
+        self
+    }
+
+    /// Sets the maximum number of distinct cache keys tracked for concurrent miss coalescing.
+    ///
+    /// When this limit is reached, misses for new keys bypass coalescing and execute normally.
+    /// Existing in-flight keys can still be followed. Set to `0` to disable miss coalescing.
+    #[inline]
+    #[must_use]
+    pub fn max_in_flight(mut self, max_in_flight: usize) -> Self {
+        self.in_flight = Arc::new(InFlight::new(max_in_flight));
+        self
+    }
 }
 
 async fn call_next_and_cache<S>(
     store: &S,
     key: S::Key,
+    cache_private: bool,
     req: &mut Request,
     depot: &mut Depot,
     res: &mut Response,
@@ -538,15 +581,18 @@ where
     S: CacheStore,
 {
     ctrl.call_next(req, depot, res).await;
-    let cached_data = cached_response(res)?;
+    let cached_data = cached_response(res, cache_private)?;
     if let Err(e) = store.save_entry(depot, key, cached_data.clone()).await {
         tracing::error!(error = ?e, "cache failed");
     }
     Some(cached_data)
 }
 
-fn cached_response(res: &Response) -> Option<CachedEntry> {
+fn cached_response(res: &Response, cache_private: bool) -> Option<CachedEntry> {
     if res.body.is_stream() || res.body.is_error() {
+        return None;
+    }
+    if !cache_private && response_has_private_cache_headers(res.headers()) {
         return None;
     }
     let headers = res.headers().clone();
@@ -558,6 +604,31 @@ fn cached_response(res: &Response) -> Option<CachedEntry> {
         }
     };
     Some(CachedEntry::new(res.status_code, headers, body))
+}
+
+fn request_has_private_cache_headers(req: &Request) -> bool {
+    req.headers().contains_key(AUTHORIZATION) || req.headers().contains_key(COOKIE)
+}
+
+fn response_has_private_cache_headers(headers: &HeaderMap) -> bool {
+    headers.contains_key(SET_COOKIE)
+        || headers.contains_key(VARY)
+        || cache_control_contains(headers, "private")
+        || cache_control_contains(headers, "no-store")
+}
+
+fn cache_control_contains(headers: &HeaderMap, directive: &str) -> bool {
+    headers.get_all(CACHE_CONTROL).iter().any(|value| {
+        value.to_str().ok().is_some_and(|value| {
+            value.split(',').any(|part| {
+                let part = part.trim();
+                part.eq_ignore_ascii_case(directive)
+                    || part
+                        .split_once('=')
+                        .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case(directive))
+            })
+        })
+    })
 }
 
 #[async_trait]
@@ -574,7 +645,9 @@ where
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        if self.skipper.skipped(req, depot) {
+        if self.skipper.skipped(req, depot)
+            || (!self.cache_private && request_has_private_cache_headers(req))
+        {
             ctrl.call_next(req, depot, res).await;
             return;
         }
@@ -584,8 +657,16 @@ where
         let Some(cache) = self.store.load_entry(depot, &key).await else {
             match self.in_flight.enter(key.clone()) {
                 FlightPermit::Leader(guard) => {
-                    let cached_data =
-                        call_next_and_cache(&self.store, key, req, depot, res, ctrl).await;
+                    let cached_data = call_next_and_cache(
+                        &self.store,
+                        key,
+                        self.cache_private,
+                        req,
+                        depot,
+                        res,
+                        ctrl,
+                    )
+                    .await;
                     guard.finish(cached_data);
                 }
                 FlightPermit::Follower(flight) => {
@@ -594,8 +675,29 @@ where
                         respond_from_cache(res, cache);
                         ctrl.skip_rest();
                     } else {
-                        call_next_and_cache(&self.store, key, req, depot, res, ctrl).await;
+                        call_next_and_cache(
+                            &self.store,
+                            key,
+                            self.cache_private,
+                            req,
+                            depot,
+                            res,
+                            ctrl,
+                        )
+                        .await;
                     }
+                }
+                FlightPermit::Bypass => {
+                    call_next_and_cache(
+                        &self.store,
+                        key,
+                        self.cache_private,
+                        req,
+                        depot,
+                        res,
+                        ctrl,
+                    )
+                    .await;
                 }
             }
             return;
@@ -937,6 +1039,72 @@ mod tests {
     fn test_cache_new() {
         let cache = Cache::new(MokaStore::<String>::new(100), RequestIssuer::default());
         assert!(format!("{cache:?}").contains("Cache"));
+    }
+
+    #[test]
+    fn in_flight_limit_bypasses_new_keys_when_full() {
+        let in_flight = Arc::new(InFlight::new(1));
+        let FlightPermit::Leader(first) = in_flight.enter("a") else {
+            panic!("first key should lead an in-flight request");
+        };
+
+        assert!(matches!(in_flight.enter("a"), FlightPermit::Follower(_)));
+        assert!(matches!(in_flight.enter("b"), FlightPermit::Bypass));
+
+        drop(first);
+        assert!(matches!(in_flight.enter("b"), FlightPermit::Leader(_)));
+    }
+
+    #[test]
+    fn cache_max_in_flight_can_disable_coalescing() {
+        let cache =
+            Cache::new(MokaStore::<String>::new(100), RequestIssuer::default()).max_in_flight(0);
+
+        assert!(matches!(
+            cache.in_flight.enter("uncached".to_owned()),
+            FlightPermit::Bypass
+        ));
+    }
+
+    #[test]
+    fn cached_response_skips_private_cache_headers_by_default() {
+        for (name, value) in [
+            (SET_COOKIE, "sid=abc"),
+            (VARY, "accept-language"),
+            (CACHE_CONTROL, "private"),
+            (CACHE_CONTROL, "max-age=60, no-store"),
+        ] {
+            let mut res = Response::new();
+            res.body(ResBody::Once(Bytes::from_static(b"cached")));
+            res.headers_mut().insert(name, value.parse().unwrap());
+            assert!(cached_response(&res, false).is_none());
+            assert!(cached_response(&res, true).is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn authorization_requests_are_not_cached_by_default() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cache = Cache::new(
+            MokaStore::builder()
+                .time_to_live(std::time::Duration::from_secs(60))
+                .build(),
+            RequestIssuer::default(),
+        );
+        let router = Arc::new(Router::new().hoop(cache).goal(SlowCached {
+            calls: calls.clone(),
+        }));
+
+        for _ in 0..2 {
+            let mut res = TestClient::get("http://127.0.0.1:5801")
+                .add_header(AUTHORIZATION, "Bearer token", true)
+                .send(router.clone())
+                .await;
+            assert_eq!(res.status_code, Some(StatusCode::OK));
+            let _ = res.take_string().await.unwrap();
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

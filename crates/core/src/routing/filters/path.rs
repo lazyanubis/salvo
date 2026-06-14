@@ -1,4 +1,14 @@
 //! Path filter implementation.
+//!
+//! A request path is matched segment by segment against a pattern. The smallest
+//! matching unit of such a pattern is called a **wisp**: it inspects the current
+//! position of the path and decides whether it matches, optionally capturing a
+//! named parameter. For example, the pattern `/users/{id}/posts` is made up of the
+//! constant wisps `users` and `posts` plus the named wisp `id`.
+//!
+//! Every wisp implements the [`PathWisp`] trait. The concrete kinds are enumerated
+//! by [`WispKind`] (constant, named, chars, regex and comb), and custom wisps can be
+//! registered through the [`WispBuilder`] trait.
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
@@ -10,9 +20,13 @@ use regex::Regex;
 
 use crate::async_trait;
 use crate::http::Request;
-use crate::routing::{Filter, PathState};
+use crate::routing::{Filter, FilterInfo, PathState};
 
-/// PathWisp
+/// A single matching unit of a path pattern.
+///
+/// A wisp inspects the current position of the [`PathState`] and reports whether
+/// the path matches, capturing named parameters along the way. A path pattern is
+/// composed of one or more wisps; see [`WispKind`] for the available kinds.
 pub trait PathWisp: Send + Sync + fmt::Debug + 'static {
     #[doc(hidden)]
     fn type_id(&self) -> std::any::TypeId {
@@ -22,16 +36,23 @@ pub trait PathWisp: Send + Sync + fmt::Debug + 'static {
     fn type_name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
-    /// Validate the wisp. Panic if invalid.
+    /// Validate the wisp. Returns an error if invalid.
     fn validate(&self) -> Result<(), String> {
         Ok(())
     }
-    /// Detect is that path matched.
+    /// Return whether the path matches.
     fn detect(&self, state: &mut PathState) -> bool;
 }
-/// WispBuilder
+/// Builds a [`PathWisp`] from a parsed pattern fragment.
+///
+/// Builders are registered by name (e.g. `num`, `hex`) and invoked while a path
+/// pattern is parsed, allowing custom wisp kinds to be plugged in.
 pub trait WispBuilder: Send + Sync {
-    /// Build `PathWisp`.
+    /// Builds a [`WispKind`] from a parsed pattern fragment.
+    ///
+    /// * `name` - the captured parameter name.
+    /// * `sign` - the builder name that selected this builder (e.g. `num`).
+    /// * `args` - any arguments passed to the builder in the pattern.
     fn build(&self, name: String, sign: String, args: Vec<String>) -> Result<WispKind, String>;
 }
 
@@ -54,17 +75,27 @@ fn is_hex(ch: char) -> bool {
     ch.is_ascii_hexdigit()
 }
 
+#[cfg(feature = "matched-path")]
+#[inline]
+fn push_named_part(matched_parts: &mut Vec<String>, name: &str) {
+    let mut s = String::with_capacity(name.len() + 2);
+    s.push('{');
+    s.push_str(name);
+    s.push('}');
+    matched_parts.push(s);
+}
+
 /// Enum of all wisp kinds.
 pub enum WispKind {
-    /// ConstWisp.
+    /// Matches a literal constant string in the path. See [`ConstWisp`].
     Const(ConstWisp),
-    /// NamedWisp.
+    /// Captures a whole segment, or the remaining path for wildcards. See [`NamedWisp`].
     Named(NamedWisp),
-    /// CharsWisp.
+    /// Matches a run of characters accepted by a checker. See [`CharsWisp`].
     Chars(CharsWisp),
-    /// RegexWisp.
+    /// Matches part of a segment with a regex pattern. See [`RegexWisp`].
     Regex(RegexWisp),
-    /// CombWisp.
+    /// Combines several wisps within a single segment. See [`CombWisp`].
     Comb(CombWisp),
 }
 impl PathWisp for WispKind {
@@ -131,7 +162,7 @@ impl From<CombWisp> for WispKind {
     }
 }
 
-/// RegexWispBuilder
+/// A [`WispBuilder`] that builds a [`RegexWisp`] from a shared regex pattern.
 #[derive(Debug)]
 pub struct RegexWispBuilder(Regex);
 impl RegexWispBuilder {
@@ -152,7 +183,7 @@ impl WispBuilder for RegexWispBuilder {
     }
 }
 
-/// CharsWispBuilder
+/// A [`WispBuilder`] that builds a [`CharsWisp`] from a per-character checker.
 pub struct CharsWispBuilder(Arc<dyn Fn(char) -> bool + Send + Sync + 'static>);
 impl CharsWispBuilder {
     /// Create new `CharsWispBuilder`.
@@ -194,7 +225,7 @@ impl WispBuilder for CharsWispBuilder {
                     .parse::<usize>()
                     .map_err(|_| format!("parse range for {name} failed"))?;
                 if min < 1 {
-                    return Err("min_width must greater or equal to 1".to_owned());
+                    return Err("min_width must be greater than or equal to 1".to_owned());
                 }
                 min
             };
@@ -211,7 +242,7 @@ impl WispBuilder for CharsWispBuilder {
                             .parse::<usize>()
                             .map_err(|_| format!("parse range for {name} failed"))?;
                         if max <= 1 {
-                            return Err("min_width must greater than 1".to_owned());
+                            return Err("max_width must be greater than 1".to_owned());
                         }
                         max - 1
                     } else {
@@ -219,7 +250,7 @@ impl WispBuilder for CharsWispBuilder {
                             .parse::<usize>()
                             .map_err(|_| format!("parse range for {name} failed"))?;
                         if max < 1 {
-                            return Err("min_width must greater or equal to 1".to_owned());
+                            return Err("max_width must be greater than or equal to 1".to_owned());
                         }
                         max
                     };
@@ -237,7 +268,7 @@ impl WispBuilder for CharsWispBuilder {
     }
 }
 
-/// Chars wisp matches characters in URL segment.
+/// Chars wisp matches a run of characters within a URL segment.
 pub struct CharsWisp {
     name: String,
     checker: Arc<dyn Fn(char) -> bool + Send + Sync + 'static>,
@@ -269,7 +300,7 @@ impl PathWisp for CharsWisp {
                     state.forward(max_width);
                     state.params.insert(&self.name, chars.into_iter().collect());
                     #[cfg(feature = "matched-path")]
-                    state.matched_parts.push(format!("{{{}}}", self.name));
+                    push_named_part(&mut state.matched_parts, &self.name);
                     return true;
                 }
             }
@@ -277,7 +308,7 @@ impl PathWisp for CharsWisp {
                 state.forward(chars.len());
                 state.params.insert(&self.name, chars.into_iter().collect());
                 #[cfg(feature = "matched-path")]
-                state.matched_parts.push(format!("{{{}}}", self.name));
+                push_named_part(&mut state.matched_parts, &self.name);
                 true
             } else {
                 false
@@ -293,7 +324,7 @@ impl PathWisp for CharsWisp {
                 state.forward(chars.len());
                 state.params.insert(&self.name, chars.into_iter().collect());
                 #[cfg(feature = "matched-path")]
-                state.matched_parts.push(format!("{{{}}}", self.name));
+                push_named_part(&mut state.matched_parts, &self.name);
                 true
             } else {
                 false
@@ -302,7 +333,7 @@ impl PathWisp for CharsWisp {
     }
 }
 
-/// Comb wisp is a group of other kind of wisps in the same url segment.
+/// Comb wisp is a group of other kinds of wisps within the same URL segment.
 #[derive(Debug)]
 pub struct CombWisp {
     names: Vec<String>,
@@ -314,7 +345,7 @@ impl CombWisp {
     /// Create new `CombWisp`.
     ///
     /// # Panics
-    /// If contains unsupported `WispKind``.
+    /// If it contains an unsupported `WispKind`.
     pub fn new(wisps: Vec<WispKind>) -> Result<Self, String> {
         let mut comb_regex = "^".to_owned();
         let mut names = Vec::with_capacity(wisps.len());
@@ -322,7 +353,7 @@ impl CombWisp {
         let mut is_greedy = false;
         let mut wild_start = None;
         let mut wild_regex = None;
-        let any_chars_regex = Regex::new(".*").expect("regex should worked");
+        let any_chars_regex = Regex::new(".*").expect("regex should compile");
         for wisp in wisps {
             match wisp {
                 WispKind::Const(wisp) => {
@@ -414,11 +445,12 @@ impl PathWisp for CombWisp {
         let Some(picked) = state.pick().map(|s| s.to_owned()) else {
             return false;
         };
-        let mut wild_path = if self.wild_regex.is_some() {
-            state.all_rest().unwrap_or_default().to_string()
+        let wild_path_buf = if self.wild_regex.is_some() {
+            state.all_rest().unwrap_or_default().into_owned()
         } else {
-            "".to_owned()
+            String::new()
         };
+        let mut wild_path: &str = &wild_path_buf;
         let caps = self.comb_regex.captures(&picked);
         if let Some(caps) = caps {
             let take_count = if self.wild_regex.is_some() {
@@ -429,12 +461,12 @@ impl PathWisp for CombWisp {
             #[cfg(feature = "matched-path")]
             let mut start = 0;
             #[cfg(feature = "matched-path")]
-            let mut matched_part = "".to_owned();
+            let mut matched_part = String::new();
             for name in self.names.iter().take(take_count) {
                 if let Some(value) = caps.name(name) {
                     state.params.insert(name, value.as_str().to_owned());
                     if self.wild_regex.is_some() {
-                        wild_path = wild_path.trim_start_matches(value.as_str()).to_owned();
+                        wild_path = wild_path.trim_start_matches(value.as_str());
                     }
                     #[cfg(feature = "matched-path")]
                     {
@@ -444,7 +476,10 @@ impl PathWisp for CombWisp {
                             };
                             matched_part.push_str(literal);
                         }
-                        matched_part.push_str(&format!("{{{name}}}"));
+                        matched_part.reserve(name.len() + 2);
+                        matched_part.push('{');
+                        matched_part.push_str(name);
+                        matched_part.push('}');
                         start = value.end();
                     }
                 } else {
@@ -486,13 +521,13 @@ impl PathWisp for CombWisp {
                 return false;
             }
             if !wild_path.is_empty() || !wild_start.starts_with("*+") {
-                let cap = wild_regex.captures(&wild_path).and_then(|caps| caps.get(0));
+                let cap = wild_regex.captures(wild_path).and_then(|caps| caps.get(0));
                 if let Some(cap) = cap {
                     let cap = cap.as_str().to_owned();
                     state.forward(cap.len());
                     state.params.insert(wild_name, cap);
                     #[cfg(feature = "matched-path")]
-                    state.matched_parts.push(format!("{{{wild_name}}}"));
+                    push_named_part(&mut state.matched_parts, wild_name);
                     true
                 } else {
                     false
@@ -506,7 +541,8 @@ impl PathWisp for CombWisp {
     }
 }
 
-/// Named wisp match part in url segment and give it a name.
+/// Named wisp captures a path part under a name: a whole segment for `{name}`, or
+/// the remaining path for wildcard names (`{**rest}`, `{*+rest}`, `{*?rest}`).
 #[derive(Debug, Eq, PartialEq)]
 pub struct NamedWisp(pub String);
 impl PathWisp for NamedWisp {
@@ -527,7 +563,7 @@ impl PathWisp for NamedWisp {
                 state.params.insert(&self.0, rest);
                 state.cursor.0 = state.parts.len();
                 #[cfg(feature = "matched-path")]
-                state.matched_parts.push(format!("{{{}}}", self.0));
+                push_named_part(&mut state.matched_parts, &self.0);
                 true
             } else {
                 false
@@ -541,13 +577,13 @@ impl PathWisp for NamedWisp {
             state.forward(picked.len());
             state.params.insert(&self.0, picked);
             #[cfg(feature = "matched-path")]
-            state.matched_parts.push(format!("{{{}}}", self.0));
+            push_named_part(&mut state.matched_parts, &self.0);
             true
         }
     }
 }
 
-/// Regex wisp match part in url segment use regex pattern and give it a name.
+/// Regex wisp matches part of a URL segment with a regex pattern and captures it under a name.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct RegexWisp {
@@ -602,7 +638,7 @@ impl PathWisp for RegexWisp {
                     state.forward(cap.len());
                     state.params.insert(&self.name, cap);
                     #[cfg(feature = "matched-path")]
-                    state.matched_parts.push(format!("{{{}}}", self.name));
+                    push_named_part(&mut state.matched_parts, &self.name);
                     true
                 } else {
                     false
@@ -620,7 +656,7 @@ impl PathWisp for RegexWisp {
                 state.forward(cap.len());
                 state.params.insert(&self.name, cap);
                 #[cfg(feature = "matched-path")]
-                state.matched_parts.push(format!("{{{}}}", self.name));
+                push_named_part(&mut state.matched_parts, &self.name);
                 true
             } else {
                 false
@@ -629,7 +665,7 @@ impl PathWisp for RegexWisp {
     }
 }
 
-/// Const wisp is used for match the const string in the path.
+/// Const wisp matches a constant string in the path.
 #[derive(Eq, PartialEq, Debug)]
 pub struct ConstWisp(pub String);
 impl PathWisp for ConstWisp {
@@ -1013,7 +1049,7 @@ impl PathParser {
     }
 }
 
-/// Filter request by it's path information.
+/// Filter requests by their path information.
 pub struct PathFilter {
     raw_value: String,
     path_wisps: Vec<WispKind>,
@@ -1029,6 +1065,10 @@ impl Filter for PathFilter {
     #[inline]
     async fn filter(&self, _req: &mut Request, state: &mut PathState) -> bool {
         self.detect(state)
+    }
+    #[inline]
+    fn info(&self) -> FilterInfo {
+        FilterInfo::Path(self.raw_value.clone())
     }
 }
 impl PathFilter {

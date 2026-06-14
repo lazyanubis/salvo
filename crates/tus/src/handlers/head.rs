@@ -30,7 +30,7 @@ async fn head(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         return;
     }
 
-    let id = match opts.get_file_id_from_request(req) {
+    let id = match opts.extract_file_id_from_request(req) {
         Ok(id) => id,
         Err(e) => {
             res.status_code(e.status());
@@ -95,25 +95,23 @@ async fn head(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             Some(TusError::Internal("Upload file's offset value not found!".into()).status());
         return;
     };
-    headers.insert(
-        "Upload-Offset",
-        HeaderValue::from_str(&offset.to_string()).unwrap(),
-    );
+    headers.insert("Upload-Offset", HeaderValue::from(*offset));
 
-    if upload_info.get_size_is_deferred() {
+    if upload_info.is_size_deferred() {
         headers.insert("Upload-Defer-Length", HeaderValue::from_static("1"));
     } else if let Some(size) = &upload_info.size {
-        headers.insert(
-            "Upload-Length",
-            HeaderValue::from_str(&size.to_string()).unwrap(),
-        );
+        headers.insert("Upload-Length", HeaderValue::from(*size));
     }
 
     if let Some(metadata) = upload_info.metadata {
-        headers.insert(
-            "Upload-Metadata",
-            HeaderValue::from_str(&Metadata::stringify(metadata)).unwrap(),
-        );
+        if let Ok(v) = HeaderValue::from_str(&Metadata::stringify(metadata)) {
+            headers.insert("Upload-Metadata", v);
+        } else {
+            res.status_code = Some(
+                TusError::Internal("Stored Upload-Metadata is not a valid header".into()).status(),
+            );
+            return;
+        }
     }
 
     if let Some(expires_at) = expires_at {
@@ -123,14 +121,13 @@ async fn head(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         };
         if !is_finished {
             let expires_value = expires_at.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
-            headers.insert(
-                H_UPLOAD_EXPIRES,
-                HeaderValue::from_str(&expires_value).unwrap(),
-            );
+            if let Ok(v) = HeaderValue::from_str(&expires_value) {
+                headers.insert(H_UPLOAD_EXPIRES, v);
+            }
         }
     }
 }
 
-pub fn head_handler() -> Router {
+pub(crate) fn head_handler() -> Router {
     Router::with_path("{id}").head(head)
 }

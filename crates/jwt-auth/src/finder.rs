@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use salvo_core::async_trait;
-use salvo_core::http::header::{AUTHORIZATION, HeaderName, PROXY_AUTHORIZATION};
+use salvo_core::http::header::{AUTHORIZATION, HeaderName};
 use salvo_core::http::{Method, Request};
 
 use super::ALL_METHODS;
@@ -24,7 +24,9 @@ pub trait JwtTokenFinder: Send + Sync {
 /// Extracts JWT tokens from HTTP request headers.
 ///
 /// By default, this finder looks for Bearer tokens in the `Authorization`
-/// and `Proxy-Authorization` headers for all HTTP methods.
+/// header for all HTTP methods. Add `Proxy-Authorization` explicitly with
+/// [`HeaderFinder::header_names`] if your deployment really uses it for origin
+/// application authentication.
 ///
 /// # Example
 ///
@@ -55,7 +57,7 @@ impl HeaderFinder {
     pub fn new() -> Self {
         Self {
             cared_methods: ALL_METHODS.to_vec(),
-            header_names: vec![AUTHORIZATION, PROXY_AUTHORIZATION],
+            header_names: vec![AUTHORIZATION],
         }
     }
 
@@ -93,13 +95,44 @@ impl JwtTokenFinder for HeaderFinder {
         if self.cared_methods.contains(req.method()) {
             for header_name in &self.header_names {
                 if let Some(Ok(auth)) = req.headers().get(header_name).map(|auth| auth.to_str())
-                    && auth.starts_with("Bearer")
+                    && let Some((scheme, token)) = auth.split_once(' ')
+                    && scheme.eq_ignore_ascii_case("Bearer")
                 {
-                    return auth.split_once(' ').map(|(_, token)| token.to_owned());
+                    let token = token.trim_start();
+                    if !token.is_empty() {
+                        return Some(token.to_owned());
+                    }
                 }
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use salvo_core::http::header::AUTHORIZATION;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn header_finder_rejects_prefixed_bearer_scheme() {
+        let finder = HeaderFinder::new();
+        let mut req = Request::new();
+        req.headers_mut()
+            .insert(AUTHORIZATION, "BearerX token".parse().unwrap());
+
+        assert_eq!(finder.find_token(&mut req).await, None);
+    }
+
+    #[tokio::test]
+    async fn header_finder_accepts_case_insensitive_bearer_scheme() {
+        let finder = HeaderFinder::new();
+        let mut req = Request::new();
+        req.headers_mut()
+            .insert(AUTHORIZATION, "bearer token".parse().unwrap());
+
+        assert_eq!(finder.find_token(&mut req).await.as_deref(), Some("token"));
     }
 }
 

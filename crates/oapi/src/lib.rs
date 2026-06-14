@@ -7,6 +7,13 @@
 #[macro_use]
 mod cfg;
 
+#[cfg(any(
+    feature = "swagger-ui",
+    feature = "scalar",
+    feature = "rapidoc",
+    feature = "redoc"
+))]
+mod html;
 mod openapi;
 pub use openapi::*;
 
@@ -63,7 +70,7 @@ extern crate self as salvo_oapi;
 ///
 /// Generated schemas can be referenced or reused in path operations.
 ///
-/// This trait is derivable and can be used with `[#derive]` attribute. For a details of
+/// This trait is derivable and can be used with the `#[derive]` attribute. For details of
 /// `#[derive(ToSchema)]` refer to [derive documentation][derive].
 ///
 /// [derive]: derive.ToSchema.html
@@ -82,7 +89,7 @@ extern crate self as salvo_oapi;
 /// }
 /// ```
 ///
-/// Following manual implementation is equal to above derive one.
+/// The following manual implementation is equivalent to the derived one above.
 /// ```
 /// use salvo_oapi::{Components, ToSchema, RefOr, Schema, SchemaFormat, BasicType, SchemaType, KnownFormat, Object};
 /// # struct Pet {
@@ -216,33 +223,33 @@ impl SchemaReference {
         self
     }
 
-    /// Get the composed name including generic parameters.
+    /// Returns the formatted display name including generic parameters.
     ///
     /// For example, `Page` with child `User` produces `Page<User>`.
     #[must_use]
-    pub fn compose_name(&self) -> String {
+    pub fn display_name(&self) -> String {
         if self.references.is_empty() {
             self.name.as_ref().to_owned()
         } else {
             let generic_names: Vec<String> =
-                self.references.iter().map(|r| r.compose_name()).collect();
+                self.references.iter().map(|r| r.display_name()).collect();
             format!("{}<{}>", self.name, generic_names.join(", "))
         }
     }
 
-    /// Get the schemas for the direct generic type parameters.
+    /// Returns the direct generic type parameter references of this schema.
     #[must_use]
-    pub fn compose_generics(&self) -> &[Self] {
+    pub fn generic_params(&self) -> &[Self] {
         &self.references
     }
 
-    /// Collect all child references recursively (depth-first).
+    /// Collects all child references recursively (depth-first).
     #[must_use]
-    pub fn compose_child_references(&self) -> Vec<&Self> {
+    pub fn child_references(&self) -> Vec<&Self> {
         let mut result = Vec::new();
         for reference in &self.references {
             result.push(reference);
-            result.extend(reference.compose_child_references());
+            result.extend(reference.child_references());
         }
         result
     }
@@ -897,7 +904,7 @@ impl ComposeSchema for serde_json::value::RawValue {
 ///             .parameter(
 ///                 salvo_oapi::Parameter::new("id")
 ///                     .required(salvo_oapi::Required::True)
-///                     .parameter_in(salvo_oapi::ParameterIn::Path)
+///                     .location(salvo_oapi::ParameterIn::Path)
 ///                     .description("Id of pet")
 ///                     .schema(
 ///                         salvo_oapi::Object::new()
@@ -910,7 +917,7 @@ impl ComposeSchema for serde_json::value::RawValue {
 ///             .parameter(
 ///                 salvo_oapi::Parameter::new("name")
 ///                     .required(salvo_oapi::Required::True)
-///                     .parameter_in(salvo_oapi::ParameterIn::Query)
+///                     .location(salvo_oapi::ParameterIn::Query)
 ///                     .description("Name of pet")
 ///                     .schema(
 ///                         salvo_oapi::Object::new()
@@ -1035,7 +1042,7 @@ where
     fn to_responses(components: &mut Components) -> Responses {
         Responses::new().response(
             "200",
-            Response::new("Response json format data")
+            Response::new("JSON response body")
                 .add_content("application/json", Content::new(C::to_schema(components))),
         )
     }
@@ -1071,8 +1078,8 @@ impl ToResponses for StatusError {
             Self::upgrade_required(),
             Self::precondition_required(),
             Self::too_many_requests(),
-            Self::request_header_fields_toolarge(),
-            Self::unavailable_for_legalreasons(),
+            Self::request_header_fields_too_large(),
+            Self::unavailable_for_legal_reasons(),
             Self::internal_server_error(),
             Self::not_implemented(),
             Self::bad_gateway(),

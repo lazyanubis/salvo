@@ -1,5 +1,6 @@
 //! Rust implementation of Openapi Spec V3.1.
 
+mod callback;
 mod components;
 mod content;
 mod encoding;
@@ -28,6 +29,7 @@ use salvo_core::{Depot, FlowCtrl, Handler, Router, async_trait, writing};
 use serde::de::{Error, Expected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub use self::callback::Callback;
 pub use self::components::Components;
 pub use self::content::Content;
 pub use self::encoding::Encoding;
@@ -35,6 +37,7 @@ pub use self::example::Example;
 pub use self::external_docs::ExternalDocs;
 pub use self::header::Header;
 pub use self::info::{Contact, Info, License};
+pub use self::link::Link;
 pub use self::operation::{Operation, Operations};
 pub use self::parameter::{Parameter, ParameterIn, ParameterStyle, Parameters};
 pub use self::path::{PathItem, PathItemType, Paths};
@@ -101,6 +104,15 @@ pub struct OpenApi {
     /// See more details at <https://spec.openapis.org/oas/latest.html#paths-object>.
     pub paths: Paths,
 
+    /// Incoming webhooks that may be received as part of this API.
+    ///
+    /// Each value is a [`PathItem`] (or a [`Ref`] to one) keyed by a unique name. Added in
+    /// OpenAPI 3.1.
+    ///
+    /// See more details at <https://spec.openapis.org/oas/v3.1.0#openapi-object>.
+    #[serde(skip_serializing_if = "PathMap::is_empty", default)]
+    pub webhooks: PathMap<String, RefOr<PathItem>>,
+
     /// Holds various reusable schemas for the OpenAPI document.
     ///
     /// Few of these elements are security schemas and object schemas.
@@ -129,12 +141,13 @@ pub struct OpenApi {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_docs: Option<ExternalDocs>,
 
-    /// Schema keyword can be used to override default _`$schema`_ dialect which is by default
-    /// `<https://spec.openapis.org/oas/3.1/dialect/base>`.
+    /// The default value for the `$schema` keyword within Schema Objects contained in this
+    /// document. It defaults to `<https://spec.openapis.org/oas/3.1/dialect/base>` and, when
+    /// set, must be a URI.
     ///
-    /// All the references and individual files could use their own schema dialect.
-    #[serde(rename = "$schema", default, skip_serializing_if = "String::is_empty")]
-    pub schema: String,
+    /// See <https://spec.openapis.org/oas/v3.1.0#openapi-object> for details.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub json_schema_dialect: String,
 
     /// Optional extensions "x-something".
     #[serde(skip_serializing_if = "PropMap::is_empty", flatten)]
@@ -196,23 +209,27 @@ impl OpenApi {
         }
     }
 
-    /// Merge `other` [`OpenApi`] consuming it and resuming it's content.
+    /// Merge `other` [`OpenApi`] consuming it and resuming its content.
     ///
-    /// Merge function will take all `self` nonexistent _`servers`, `paths`, `schemas`, `responses`,
-    /// `security_schemes`, `security_requirements` and `tags`_ from _`other`_ [`OpenApi`].
+    /// Merge function will take all `self` nonexistent _`servers`, `paths`, `webhooks`,
+    /// `schemas`, `responses`, `security_schemes`, `security_requirements` and `tags`_ from
+    /// _`other`_ [`OpenApi`].
     ///
-    /// This function performs a shallow comparison for `paths`, `schemas`, `responses` and
-    /// `security schemes` which means that only _`name`_ and _`path`_ is used for comparison. When
-    /// match occurs the exists item will be overwrite.
+    /// This function performs a shallow comparison for `paths`, `webhooks`, `schemas`,
+    /// `responses` and `security schemes` which means that only _`name`_ and _`path`_ is used
+    /// for comparison. When a match occurs the existing item will be overwritten.
     ///
     /// For _`servers`_, _`tags`_ and _`security_requirements`_ the whole item will be used for
     /// comparison.
     ///
-    /// **Note!** `info`, `openapi` and `external_docs` and `schema` will not be merged.
+    /// **Note!** `info`, `openapi`, `external_docs` and `json_schema_dialect` will not be merged.
     #[must_use]
     pub fn merge(mut self, mut other: Self) -> Self {
         self.servers.append(&mut other.servers);
         self.paths.append(&mut other.paths);
+        for (name, item) in std::mem::take(&mut other.webhooks) {
+            self.webhooks.insert(name, item);
+        }
         self.components.append(&mut other.components);
         self.security.append(&mut other.security);
         self.tags.append(&mut other.tags);
@@ -308,6 +325,36 @@ impl OpenApi {
         I: Into<PathItem>,
     {
         self.paths.insert(path.into(), item.into());
+        self
+    }
+
+    /// Replace the incoming webhooks map and return `Self`.
+    ///
+    /// Webhooks were added in OpenAPI 3.1. See [`OpenApi::webhooks`].
+    #[must_use]
+    pub fn webhooks<I, K, V>(mut self, webhooks: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<RefOr<PathItem>>,
+    {
+        self.webhooks = webhooks
+            .into_iter()
+            .map(|(name, item)| (name.into(), item.into()))
+            .collect();
+        self
+    }
+
+    /// Insert a single named webhook and return `Self`.
+    ///
+    /// The value may be an inline [`PathItem`] or a [`Ref`] to one stored elsewhere.
+    #[must_use]
+    pub fn add_webhook<K: Into<String>, V: Into<RefOr<PathItem>>>(
+        mut self,
+        name: K,
+        webhook: V,
+    ) -> Self {
+        self.webhooks.insert(name.into(), webhook.into());
         self
     }
 
@@ -460,18 +507,24 @@ impl OpenApi {
         self
     }
 
-    /// Override default `$schema` dialect for the Open API doc.
+    /// Override the default JSON Schema dialect for this OpenAPI document.
+    ///
+    /// Sets the [`jsonSchemaDialect`][spec] top-level field, which provides the default
+    /// `$schema` value used by Schema Objects contained in this document.
+    ///
+    /// [spec]: https://spec.openapis.org/oas/v3.1.0#openapi-object
     ///
     /// # Examples
     ///
     /// _**Override default schema dialect.**_
     /// ```rust
     /// # use salvo_oapi::OpenApi;
-    /// let _ = OpenApi::new("openapi", "0.1.0").schema("http://json-schema.org/draft-07/schema#");
+    /// let _ = OpenApi::new("openapi", "0.1.0")
+    ///     .json_schema_dialect("http://json-schema.org/draft-07/schema#");
     /// ```
     #[must_use]
-    pub fn schema<S: Into<String>>(mut self, schema: S) -> Self {
-        self.schema = schema.into();
+    pub fn json_schema_dialect<S: Into<String>>(mut self, dialect: S) -> Self {
+        self.json_schema_dialect = dialect.into();
         self
     }
 
@@ -482,18 +535,18 @@ impl OpenApi {
         self
     }
 
-    /// Consusmes the [`OpenApi`] and returns [`Router`] with the [`OpenApi`] as handler.
+    /// Consumes the [`OpenApi`] and returns [`Router`] with the [`OpenApi`] as handler.
     pub fn into_router(self, path: impl Into<String>) -> Router {
         Router::with_path(path.into()).goal(self)
     }
 
-    /// Consusmes the [`OpenApi`] and information from a [`Router`].
+    /// Consumes the [`OpenApi`] and information from a [`Router`].
     #[must_use]
     pub fn merge_router(self, router: &Router) -> Self {
         self.merge_router_with_base(router, "/")
     }
 
-    /// Consusmes the [`OpenApi`] and information from a [`Router`] with base path.
+    /// Consumes the [`OpenApi`] and information from a [`Router`] with base path.
     #[must_use]
     pub fn merge_router_with_base(mut self, router: &Router, base: impl AsRef<str>) -> Self {
         let mut node = NormNode::new(router, Default::default());
@@ -532,55 +585,46 @@ impl OpenApi {
         if let Some(handler_type_id) = &node.handler_type_id
             && let Some(creator) = crate::EndpointRegistry::find(handler_type_id)
         {
-            let Endpoint {
-                mut operation,
-                mut components,
-            } = (creator)();
-            operation.tags.extend(node.metadata.tags.iter().cloned());
-            operation
-                .securities
-                .extend(node.metadata.securities.iter().cloned());
-            let methods = if let Some(method) = &node.method {
-                vec![*method]
-            } else {
-                vec![
-                    PathItemType::Get,
-                    PathItemType::Post,
-                    PathItemType::Put,
-                    PathItemType::Patch,
-                ]
-            };
-            let not_exist_parameters = operation
-                .parameters
-                .0
-                .iter()
-                .filter(|p| {
-                    p.parameter_in == ParameterIn::Path && !path_parameter_names.contains(&p.name)
-                })
-                .map(|p| &p.name)
-                .collect::<Vec<_>>();
-            if !not_exist_parameters.is_empty() {
-                tracing::warn!(parameters = ?not_exist_parameters, path, handler_name = node.handler_type_name, "information for not exist parameters");
-            }
-            #[cfg(debug_assertions)]
-            {
-                let meta_not_exist_parameters = path_parameter_names
+            if let Some(method) = node.method {
+                let Endpoint {
+                    mut operation,
+                    mut components,
+                } = (creator)();
+                operation.tags.extend(node.metadata.tags.iter().cloned());
+                operation
+                    .securities
+                    .extend(node.metadata.securities.iter().cloned());
+                let not_exist_parameters = operation
+                    .parameters
+                    .0
                     .iter()
-                    .filter(|name| {
-                        !name.starts_with('*')
-                            && !operation.parameters.0.iter().any(|parameter| {
-                                parameter.name == **name
-                                    && parameter.parameter_in == ParameterIn::Path
-                            })
+                    .filter(|p| {
+                        p.parameter_in == ParameterIn::Path
+                            && !path_parameter_names.contains(&p.name)
                     })
+                    .map(|p| &p.name)
                     .collect::<Vec<_>>();
-
-                if !meta_not_exist_parameters.is_empty() {
-                    tracing::warn!(parameters = ?meta_not_exist_parameters, path, handler_name = node.handler_type_name, "parameters information not provided");
+                if !not_exist_parameters.is_empty() {
+                    tracing::warn!(parameters = ?not_exist_parameters, path, handler_name = node.handler_type_name, "information for not exist parameters");
                 }
-            }
-            let path_item = self.paths.entry(path.clone()).or_default();
-            for method in methods {
+                #[cfg(debug_assertions)]
+                {
+                    let meta_not_exist_parameters = path_parameter_names
+                        .iter()
+                        .filter(|name| {
+                            !name.starts_with('*')
+                                && !operation.parameters.0.iter().any(|parameter| {
+                                    parameter.name == **name
+                                        && parameter.parameter_in == ParameterIn::Path
+                                })
+                        })
+                        .collect::<Vec<_>>();
+
+                    if !meta_not_exist_parameters.is_empty() {
+                        tracing::warn!(parameters = ?meta_not_exist_parameters, path, handler_name = node.handler_type_name, "parameters information not provided");
+                    }
+                }
+                let path_item = self.paths.entry(path.clone()).or_default();
                 if path_item.operations.contains_key(&method) {
                     tracing::warn!(
                         "path `{}` already contains operation for method `{:?}`",
@@ -588,10 +632,21 @@ impl OpenApi {
                         method
                     );
                 } else {
-                    path_item.operations.insert(method, operation.clone());
+                    path_item.operations.insert(method, operation);
                 }
+                self.components.append(&mut components);
+            } else {
+                // No method filter on this route: OpenAPI 3.1 has no "any-method"
+                // operation slot, so attaching the same handler to GET/POST/PUT/PATCH
+                // would lie about the API. Skip and warn so the user can attach a
+                // method filter (`.get(handler)`, `.post(handler)`, ...) explicitly.
+                tracing::warn!(
+                    path,
+                    handler_name = node.handler_type_name,
+                    "endpoint has no HTTP method filter; skipping in OpenAPI document. \
+                     Add `.get()`, `.post()`, etc. to the router to include it"
+                );
             }
-            self.components.append(&mut components);
         }
 
         for child in &mut node.children {
@@ -1133,7 +1188,7 @@ mod tests {
                                    "name": "id",
                                    "in": "path",
                                    "description": "Pet database id to get Pet for",
-                                   "required": false
+                                   "required": true
                                 }
                              ],
                              "responses": {
@@ -1222,6 +1277,47 @@ mod tests {
     }
 
     #[test]
+    fn merge_router_skips_route_without_method_filter() {
+        #[salvo_oapi::endpoint]
+        async fn any_handler() -> &'static str {
+            "ok"
+        }
+
+        // `goal()` does not attach a method filter; the route matches every HTTP method.
+        // OpenAPI 3.1 has no equivalent "any" operation, so the route should be skipped
+        // rather than fabricating four operations under it.
+        let router = Router::with_path("/no-method").goal(any_handler);
+        let doc = OpenApi::new("test api", "0.0.1").merge_router(&router);
+
+        assert!(
+            !doc.paths.contains_key("/no-method"),
+            "expected no path entry when the route lacks a method filter; \
+             got: {:?}",
+            doc.paths.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn merge_router_attaches_only_to_explicit_method() {
+        #[salvo_oapi::endpoint]
+        async fn delete_thing() -> &'static str {
+            "ok"
+        }
+
+        // Sanity check that explicit method filters still work and do not pull in
+        // sibling methods (a regression guard against the prior 4-method fan-out).
+        let router = Router::with_path("/thing").delete(delete_thing);
+        let doc = OpenApi::new("test api", "0.0.1").merge_router(&router);
+
+        let path_item = doc.paths.get("/thing").expect("/thing entry should exist");
+        assert!(path_item.operations.contains_key(&PathItemType::Delete));
+        assert!(!path_item.operations.contains_key(&PathItemType::Get));
+        assert!(!path_item.operations.contains_key(&PathItemType::Post));
+        assert!(!path_item.operations.contains_key(&PathItemType::Put));
+        assert!(!path_item.operations.contains_key(&PathItemType::Patch));
+    }
+
+    #[test]
     fn test_build_openapi() {
         let _doc = OpenApi::new("pet api", "0.1.0")
             .info(Info::new("my pet api", "0.2.0"))
@@ -1243,6 +1339,102 @@ mod tests {
             .tags(["tag1", "tag2"])
             .external_docs(ExternalDocs::default())
             .into_router("/openapi/doc");
+    }
+
+    #[test]
+    fn json_schema_dialect_serializes_under_spec_field_name() -> Result<(), serde_json::Error> {
+        let doc = OpenApi::new("api", "0.1.0")
+            .json_schema_dialect("https://json-schema.org/draft/2020-12/schema");
+        let value: Value = serde_json::from_str(&doc.to_json()?)?;
+
+        assert_eq!(
+            value["jsonSchemaDialect"],
+            Value::String("https://json-schema.org/draft/2020-12/schema".to_owned()),
+            "expected top-level `jsonSchemaDialect` field per OpenAPI 3.1.0"
+        );
+        assert!(
+            value.get("$schema").is_none(),
+            "`$schema` is the JSON Schema keyword inside Schema Objects, not the OpenAPI \
+             document-level field"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn json_schema_dialect_omits_field_when_empty() -> Result<(), serde_json::Error> {
+        let doc = OpenApi::new("api", "0.1.0");
+        let value: Value = serde_json::from_str(&doc.to_json()?)?;
+
+        assert!(value.get("jsonSchemaDialect").is_none());
+        assert!(value.get("$schema").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn webhooks_omits_field_when_empty() -> Result<(), serde_json::Error> {
+        let doc = OpenApi::new("api", "0.1.0");
+        let value: Value = serde_json::from_str(&doc.to_json()?)?;
+
+        assert!(value.get("webhooks").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn webhooks_serializes_inline_path_item() -> Result<(), serde_json::Error> {
+        let doc = OpenApi::new("api", "0.1.0").add_webhook(
+            "newPet",
+            PathItem::new(
+                PathItemType::Post,
+                Operation::new().add_response("200", Response::new("acknowledged")),
+            ),
+        );
+        let value: Value = serde_json::from_str(&doc.to_json()?)?;
+
+        assert_eq!(
+            value["webhooks"],
+            json!({
+                "newPet": {
+                    "post": {
+                        "responses": {
+                            "200": { "description": "acknowledged" }
+                        }
+                    }
+                }
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn webhooks_serializes_reference_object() -> Result<(), serde_json::Error> {
+        let doc = OpenApi::new("api", "0.1.0").add_webhook(
+            "newPet",
+            RefOr::Ref(Ref::new("#/components/pathItems/NewPetWebhook")),
+        );
+        let value: Value = serde_json::from_str(&doc.to_json()?)?;
+
+        assert_eq!(
+            value["webhooks"]["newPet"],
+            json!({ "$ref": "#/components/pathItems/NewPetWebhook" })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn webhooks_merge_combines_entries() {
+        let api_a = OpenApi::new("a", "1.0").add_webhook(
+            "newPet",
+            PathItem::new(PathItemType::Post, Operation::new()),
+        );
+        let api_b = OpenApi::new("b", "1.0").add_webhook(
+            "deletedPet",
+            PathItem::new(PathItemType::Post, Operation::new()),
+        );
+
+        let merged = api_a.merge(api_b);
+
+        assert!(merged.webhooks.contains_key("newPet"));
+        assert!(merged.webhooks.contains_key("deletedPet"));
     }
 
     #[test]

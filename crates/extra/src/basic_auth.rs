@@ -33,7 +33,7 @@
 use std::fmt::{self, Debug, Formatter};
 
 use base64::engine::{Engine, general_purpose};
-use salvo_core::http::header::{AUTHORIZATION, HeaderName, PROXY_AUTHORIZATION};
+use salvo_core::http::header::{AUTHORIZATION, HeaderName, HeaderValue, PROXY_AUTHORIZATION};
 use salvo_core::http::{Request, Response, StatusCode};
 use salvo_core::{Depot, Error, FlowCtrl, Handler, async_trait};
 
@@ -146,12 +146,15 @@ where
 #[doc(hidden)]
 #[inline]
 pub fn ask_credentials(res: &mut Response, realm: impl AsRef<str>) {
-    res.headers_mut().insert(
-        "WWW-Authenticate",
-        format!("Basic realm={:?}", realm.as_ref())
-            .parse()
-            .expect("parse WWW-Authenticate failed"),
-    );
+    // `{:?}` already escapes CR/LF, but a realm carrying other bytes that
+    // are not legal `HeaderValue` characters (anything outside visible ASCII)
+    // would still cause the parse to fail. Fall back to a bare challenge in
+    // that case so the request resolves with a 401 instead of panicking the
+    // request task.
+    let challenge = format!("Basic realm={:?}", realm.as_ref());
+    let value = HeaderValue::try_from(challenge)
+        .unwrap_or_else(|_| HeaderValue::from_static("Basic"));
+    res.headers_mut().insert("WWW-Authenticate", value);
     res.status_code(StatusCode::UNAUTHORIZED);
 }
 
@@ -170,9 +173,13 @@ pub fn parse_credentials(
         }
     }
 
-    if authorization.starts_with("Basic")
-        && let Some((_, auth)) = authorization.split_once(' ')
+    if let Some((scheme, auth)) = authorization.split_once(' ')
+        && scheme.eq_ignore_ascii_case("Basic")
     {
+        let auth = auth.trim_start();
+        if auth.is_empty() {
+            return Err(Error::other("`authorization` has bad format"));
+        }
         let auth_bytes = general_purpose::STANDARD
             .decode(auth)
             .map_err(Error::other)?;
@@ -295,5 +302,28 @@ mod tests {
         let (username, password) = result.unwrap();
         assert_eq!(username, "用户");
         assert_eq!(password, "密码");
+    }
+
+    #[test]
+    fn test_parse_credentials_rejects_prefixed_scheme() {
+        let mut req = Request::new();
+        req.headers_mut().insert(
+            AUTHORIZATION,
+            "BasicX cm9vdDpwd2Q=".parse().unwrap(),
+        );
+
+        assert!(parse_credentials(&req, &[AUTHORIZATION]).is_err());
+    }
+
+    #[test]
+    fn test_parse_credentials_accepts_case_insensitive_scheme() {
+        let mut req = Request::new();
+        req.headers_mut()
+            .insert(AUTHORIZATION, "basic cm9vdDpwd2Q=".parse().unwrap());
+
+        assert_eq!(
+            parse_credentials(&req, &[AUTHORIZATION]).unwrap(),
+            ("root".to_owned(), "pwd".to_owned())
+        );
     }
 }

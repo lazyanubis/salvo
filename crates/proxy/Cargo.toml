@@ -68,7 +68,6 @@ hyper-util = { workspace = true, optional = true, features = [
     # "http2",
     "client-legacy",
 ] }
-local-ip-address = { workspace = true }
 percent-encoding = { workspace = true }
 reqwest = { workspace = true, default-features = false, optional = true, features = [
     "charset",

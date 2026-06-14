@@ -111,9 +111,12 @@ pub const INCOMING_FLASH_KEY: &str = "::salvo::flash::incoming_flash";
 /// Key for outgoing flash messages in depot.
 pub const OUTGOING_FLASH_KEY: &str = "::salvo::flash::outgoing_flash";
 
-/// A flash is a list of messages.
+/// A flash is a list of messages carried between requests.
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]
-pub struct Flash(pub Vec<FlashMessage>);
+pub struct Flash(
+    /// The ordered list of flash messages buffered for the current request/response cycle.
+    pub Vec<FlashMessage>,
+);
 impl Flash {
     /// Add a new message with level `Debug`.
     #[inline]
@@ -197,7 +200,7 @@ impl FlashMessage {
             value: message.into(),
         }
     }
-    /// create a new `FlashMessage` with `FlashLevel::Error`.
+    /// Create a new `FlashMessage` with `FlashLevel::Error`.
     #[inline]
     pub fn error(message: impl Into<String>) -> Self {
         Self {
@@ -222,9 +225,9 @@ pub enum FlashLevel {
     Error = 4,
 }
 impl FlashLevel {
-    /// Convert a `FlashLevel` to a `&str`.
+    /// Returns the lowercase string representation of this `FlashLevel`.
     #[must_use]
-    pub fn to_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Debug => "debug",
             Self::Info => "info",
@@ -236,17 +239,17 @@ impl FlashLevel {
 }
 impl Debug for FlashLevel {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_str())
+        write!(f, "{}", self.as_str())
     }
 }
 
 impl Display for FlashLevel {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_str())
+        write!(f, "{}", self.as_str())
     }
 }
 
-/// `FlashStore` is for stores flash messages.
+/// `FlashStore` stores flash messages.
 pub trait FlashStore: Debug + Send + Sync + 'static {
     /// Get the flash messages from the store.
     fn load_flash(
@@ -610,12 +613,12 @@ mod tests {
 
     // Tests for FlashLevel
     #[test]
-    fn test_flash_level_to_str() {
-        assert_eq!(FlashLevel::Debug.to_str(), "debug");
-        assert_eq!(FlashLevel::Info.to_str(), "info");
-        assert_eq!(FlashLevel::Success.to_str(), "success");
-        assert_eq!(FlashLevel::Warning.to_str(), "warning");
-        assert_eq!(FlashLevel::Error.to_str(), "error");
+    fn test_flash_level_as_str() {
+        assert_eq!(FlashLevel::Debug.as_str(), "debug");
+        assert_eq!(FlashLevel::Info.as_str(), "info");
+        assert_eq!(FlashLevel::Success.as_str(), "success");
+        assert_eq!(FlashLevel::Warning.as_str(), "warning");
+        assert_eq!(FlashLevel::Error.as_str(), "error");
     }
 
     #[test]

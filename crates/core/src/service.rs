@@ -64,8 +64,8 @@ impl Service {
         self.router.clone()
     }
 
-    /// When the response code is 400-600 and the body is empty, capture and set the error page
-    /// content. If catchers is not set, the default error page will be used.
+    /// When the response code is 400-599 and the body is empty, capture and set the error page
+    /// content. If no catcher is set, the default error page will be used.
     ///
     /// # Example
     ///
@@ -107,9 +107,8 @@ impl Service {
         self
     }
 
-    /// Add a handler as middleware, it will run the handler when request received.
-    ///
-    /// This middleware is only effective when the filter returns true..
+    /// Add a handler as middleware. It runs the handler when a request is received,
+    /// but only when the filter returns `true`.
     #[inline]
     #[must_use]
     pub fn hoop_when<H, F>(mut self, hoop: H, filter: F) -> Self

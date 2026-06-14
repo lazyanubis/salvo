@@ -48,11 +48,24 @@ cfg_feature! {
 
 #[cfg(feature = "server-handle")]
 impl ServerHandle {
-    /// Force stop server.
+    /// Forcefully stops the server immediately, without waiting for in-flight
+    /// requests to finish. The adjective parallels [`Self::stop_graceful`];
+    /// reach for that one when you want a clean shutdown.
+    pub fn stop_forceful(&self) {
+        let _ = self.tx_cmd.send(ServerCommand::StopForceful);
+    }
+
+    /// Deprecated alias for [`Self::stop_forceful`].
     ///
-    /// Call this function will stop server immediately.
+    /// The old name reads awkwardly (`forcible` is an adjective for things
+    /// that *can* be forced, not for the act of forcing, and it does not
+    /// parallel the adjective in `stop_graceful`). Use [`stop_forceful`] for
+    /// new code; this shim keeps existing callers compiling.
+    ///
+    /// [`stop_forceful`]: Self::stop_forceful
+    #[deprecated(since = "0.94.0", note = "use `ServerHandle::stop_forceful` instead")]
     pub fn stop_forcible(&self) {
-        let _ = self.tx_cmd.send(ServerCommand::StopForcible);
+        self.stop_forceful();
     }
 
     /// Graceful stop server.
@@ -96,7 +109,7 @@ impl ServerHandle {
 
 #[cfg(feature = "server-handle")]
 enum ServerCommand {
-    StopForcible,
+    StopForceful,
     StopGraceful(Option<Duration>),
 }
 
@@ -171,11 +184,17 @@ impl<A: Acceptor + Send> Server<A> {
             }
         }
 
-        /// Force stop server.
-        ///
-        /// Call this function will stop server immediately.
+        /// Forcefully stops the server immediately, without waiting for in-flight
+        /// requests to finish. The adjective parallels [`Self::stop_graceful`];
+        /// reach for that one when you want a clean shutdown.
+        pub fn stop_forceful(&self) {
+            let _ = self.tx_cmd.send(ServerCommand::StopForceful);
+        }
+
+        /// Deprecated alias for [`Self::stop_forceful`].
+        #[deprecated(since = "0.94.0", note = "use `Server::stop_forceful` instead")]
         pub fn stop_forcible(&self) {
-            let _ = self.tx_cmd.send(ServerCommand::StopForcible);
+            self.stop_forceful();
         }
 
         /// Graceful stop server.
@@ -213,7 +232,7 @@ impl<A: Acceptor + Send> Server<A> {
 
     cfg_feature! {
         #![feature = "quinn"]
-        /// Use this function to set http3 protocol.
+        /// Use this function to set the HTTP/3 protocol.
         pub fn quinn_mut(&mut self) -> &mut quinn::Builder {
             &mut self.builder.quinn
         }
@@ -343,7 +362,7 @@ impl<A: Acceptor + Send> Server<A> {
                                     tracing::info!("initiate graceful stop server");
                                 }
                             },
-                            ServerCommand::StopForcible => {
+                            ServerCommand::StopForceful => {
                                 tracing::info!("force stop server");
                                 force_stop_token.cancel();
                             },
@@ -522,7 +541,7 @@ mod tests {
         // Give server a moment to start
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        handle.stop_forcible();
+        handle.stop_forceful();
 
         let result = timeout(Duration::from_secs(1), server_task).await;
         assert!(
@@ -639,4 +658,3 @@ mod tests {
         };
     }
 }
-

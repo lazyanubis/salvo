@@ -49,11 +49,11 @@
 //!
 //! ```ignore
 //! let tus = Tus::new()
-//!     .with_on_upload_create(|req, upload_info| async move {
+//!     .on_upload_create(|req, upload_info| async move {
 //!         println!("New upload: {:?}", upload_info);
 //!         Ok(UploadPatch::default())
 //!     })
-//!     .with_on_upload_finish(|req, upload_info| async move {
+//!     .on_upload_finish(|req, upload_info| async move {
 //!         println!("Upload complete: {:?}", upload_info);
 //!         Ok(UploadFinishPatch::default())
 //!     });
@@ -65,7 +65,7 @@
 //!
 //! ```ignore
 //! let tus = Tus::new()
-//!     .with_upload_id_naming_function(|req, metadata| async move {
+//!     .upload_id_naming_function(|req, metadata| async move {
 //!         Ok(uuid::Uuid::new_v4().to_string())
 //!     });
 //! ```
@@ -77,73 +77,109 @@
 //!
 //! Read more: <https://salvo.rs>
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::watch;
 
-use crate::error::TusError;
-use crate::handlers::{GenerateUrlCtx, Metadata};
-use crate::lockers::Locker;
 use crate::options::{MaxSize, TusOptions, UploadFinishPatch, UploadPatch};
-use crate::stores::{DataStore, DiskStore, UploadInfo};
 use crate::utils::normalize_path;
 
-mod error;
 mod handlers;
-mod lockers;
-mod stores;
 
+/// Error types returned by the tus implementation.
+pub mod error;
+/// Lock abstractions used to serialize upload access.
+pub mod lockers;
+/// Configuration types and hooks for [`Tus`].
 pub mod options;
+/// Storage abstractions and built-in storage backends.
+pub mod stores;
+/// Utility helpers for tus headers, paths, and upload IDs.
 pub mod utils;
 
+pub use error::{ProtocolError, TusError, TusResult};
+pub use handlers::{GenerateUrlCtx, Metadata};
+pub use lockers::memory_locker::MemoryLocker;
+pub use lockers::{LockGuard, Locker};
 use salvo_core::{Depot, Request, Router, handler};
+pub use stores::{ByteStream, DataStore, DiskStore, Extension, StoreInfo, UploadInfo};
 
+/// Supported tus protocol version.
 pub const TUS_VERSION: &str = "1.0.0";
+/// `Tus-Resumable` header name.
 pub const H_TUS_RESUMABLE: &str = "tus-resumable";
+/// `Tus-Version` header name.
 pub const H_TUS_VERSION: &str = "tus-version";
+/// `Tus-Extension` header name.
 pub const H_TUS_EXTENSION: &str = "tus-extension";
+/// `Tus-Max-Size` header name.
 pub const H_TUS_MAX_SIZE: &str = "tus-max-size";
 
+/// `Access-Control-Allow-Methods` header name.
 pub const H_ACCESS_CONTROL_ALLOW_METHODS: &str = "access-control-allow-methods";
+/// `Access-Control-Allow-Headers` header name.
 pub const H_ACCESS_CONTROL_ALLOW_HEADERS: &str = "access-control-allow-headers";
+/// `Access-Control-Request-Headers` header name.
 pub const H_ACCESS_CONTROL_REQUEST_HEADERS: &str = "access-control-request-headers";
+/// `Access-Control-Max-Age` header name.
 pub const H_ACCESS_CONTROL_MAX_AGE: &str = "access-control-max-age";
 
+/// `Upload-Length` header name.
 pub const H_UPLOAD_LENGTH: &str = "upload-length";
+/// `Upload-Offset` header name.
 pub const H_UPLOAD_OFFSET: &str = "upload-offset";
+/// `Upload-Metadata` header name.
 pub const H_UPLOAD_METADATA: &str = "upload-metadata";
+/// `Upload-Concat` header name.
 pub const H_UPLOAD_CONCAT: &str = "upload-concat";
+/// `Upload-Defer-Length` header name.
 pub const H_UPLOAD_DEFER_LENGTH: &str = "upload-defer-length";
+/// `Upload-Expires` header name.
 pub const H_UPLOAD_EXPIRES: &str = "upload-expires";
 
+/// `Content-Type` header name.
 pub const H_CONTENT_TYPE: &str = "content-type";
+/// `Content-Length` header name.
 pub const H_CONTENT_LENGTH: &str = "content-length";
+/// Content type for tus `PATCH` request bodies.
 pub const CT_OFFSET_OCTET_STREAM: &str = "application/offset+octet-stream";
 
+/// Reason a tus request was interrupted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CancellationReason {
+    /// The request was aborted by the client or transport.
     Abort,
+    /// The request was cancelled by local control flow.
     Cancel,
 }
 
+/// Receiver side of a cancellation notification.
 #[derive(Clone, Debug)]
 pub struct CancellationSignal {
     receiver: watch::Receiver<Option<CancellationReason>>,
 }
 
 impl CancellationSignal {
+    /// Returns the current cancellation reason, if cancellation has happened.
+    #[must_use]
     pub fn reason(&self) -> Option<CancellationReason> {
         *self.receiver.borrow()
     }
 
+    /// Returns `true` when this signal has been cancelled or aborted.
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.reason().is_some()
     }
 
+    /// Returns `true` when the signal was cancelled because the request aborted.
+    #[must_use]
     pub fn is_aborted(&self) -> bool {
         matches!(self.reason(), Some(CancellationReason::Abort))
     }
 
+    /// Waits until cancellation is observed and returns its reason.
     pub async fn cancelled(&mut self) -> CancellationReason {
         loop {
             if let Some(reason) = *self.receiver.borrow() {
@@ -156,13 +192,17 @@ impl CancellationSignal {
     }
 }
 
+/// Shared cancellation state for a tus request.
 #[derive(Clone, Debug)]
 pub struct CancellationContext {
+    /// Signal observed by async operations that should stop when the request is cancelled.
     pub signal: CancellationSignal,
     sender: watch::Sender<Option<CancellationReason>>,
 }
 
 impl CancellationContext {
+    /// Creates a new cancellation context.
+    #[must_use]
     pub fn new() -> Self {
         let (sender, receiver) = watch::channel(None);
         Self {
@@ -171,10 +211,12 @@ impl CancellationContext {
         }
     }
 
+    /// Marks the request as aborted.
     pub fn abort(&self) {
         let _ = self.sender.send(Some(CancellationReason::Abort));
     }
 
+    /// Marks the request as cancelled.
     pub fn cancel(&self) {
         let _ = self.sender.send(Some(CancellationReason::Cancel));
     }
@@ -198,10 +240,18 @@ impl TusStateHoop {
     }
 }
 
+/// Builder and router factory for tus resumable upload endpoints.
 #[derive(Clone)]
 pub struct Tus {
     options: TusOptions,
     store: Arc<dyn DataStore>,
+}
+impl std::fmt::Debug for Tus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tus")
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
 }
 impl Default for Tus {
     fn default() -> Self {
@@ -211,6 +261,8 @@ impl Default for Tus {
 
 // Tus service Configuration
 impl Tus {
+    /// Creates a tus service with default options and a [`DiskStore`].
+    #[must_use]
     pub fn new() -> Self {
         Self {
             options: TusOptions::default(),
@@ -218,21 +270,36 @@ impl Tus {
         }
     }
 
+    /// Sets the route path where tus endpoints are mounted.
+    #[must_use]
     pub fn path(mut self, path: impl Into<String>) -> Self {
         self.options.path = path.into();
         self
     }
 
+    /// Sets the maximum upload size policy.
+    #[must_use]
     pub fn max_size(mut self, max_size: MaxSize) -> Self {
         self.options.max_size = Some(max_size);
         self
     }
 
+    /// Controls whether generated `Location` headers use relative URLs.
+    #[must_use]
     pub fn relative_location(mut self, yes: bool) -> Self {
         self.options.relative_location = yes;
         self
     }
 
+    /// Sets the trusted origin used for absolute `Location` headers.
+    #[must_use]
+    pub fn canonical_origin(mut self, origin: impl Into<String>) -> Self {
+        self.options.canonical_origin = Some(origin.into());
+        self
+    }
+
+    /// Sets the allowed CORS origins for tus responses.
+    #[must_use]
     pub fn allowed_origins<I, S>(mut self, origins: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -242,6 +309,8 @@ impl Tus {
         self
     }
 
+    /// Adds extra request headers accepted by CORS preflight responses.
+    #[must_use]
     pub fn allowed_headers<I, S>(mut self, headers: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -251,6 +320,8 @@ impl Tus {
         self
     }
 
+    /// Adds extra response headers exposed to browsers by CORS.
+    #[must_use]
     pub fn exposed_headers<I, S>(mut self, headers: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -260,29 +331,61 @@ impl Tus {
         self
     }
 
+    /// Controls whether CORS responses allow credentials.
+    #[must_use]
     pub fn allow_credentials(mut self, yes: bool) -> Self {
         self.options.allowed_credentials = yes;
         self
     }
 
-    pub fn with_store(mut self, store: impl DataStore) -> Self {
+    /// Sets the [`DataStore`] used to persist uploads.
+    #[must_use]
+    pub fn store(mut self, store: impl DataStore) -> Self {
         self.store = Arc::new(store);
         self
     }
 
-    pub fn with_locker(mut self, locker: impl Locker) -> Self {
+    /// Sets the local disk root directory used by the default [`DiskStore`].
+    ///
+    /// This is a convenience for the common case of just changing where uploaded
+    /// files are stored on disk. It replaces the current store with a fresh
+    /// [`DiskStore`] rooted at `root`, so call it before any [`Self::store`]
+    /// invocation if you want to combine it with a custom store.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use salvo_tus::Tus;
+    ///
+    /// let tus = Tus::new().storage_root("/var/uploads/tus");
+    /// ```
+    #[must_use]
+    pub fn storage_root(self, root: impl Into<PathBuf>) -> Self {
+        self.store(DiskStore::new().disk_root(root))
+    }
+
+    /// Sets the [`Locker`] used to serialize concurrent writes to the same upload.
+    #[must_use]
+    pub fn locker(mut self, locker: impl Locker) -> Self {
         self.options.locker = Arc::new(locker);
         self
     }
 
+    /// Builds the Salvo router that serves the configured tus endpoints.
     pub fn into_router(self) -> Router {
         let base_path = normalize_path(&self.options.path);
+        if !self.options.relative_location && self.options.canonical_origin.is_none() {
+            tracing::warn!(
+                "Tus is configured with relative_location(false) but no canonical_origin; \
+                 absolute Location headers will be derived from the inbound Host / Forwarded \
+                 headers, which a misbehaving client or unauthenticated proxy can spoof. \
+                 Set Tus::canonical_origin(\"https://your.host\") to pin the origin."
+            );
+        }
         let state = Arc::new(self);
 
         Router::with_path(base_path)
-            .hoop(TusStateHoop {
-                state: state.clone(),
-            })
+            .hoop(TusStateHoop { state })
             .push(handlers::options_handler())
             .push(handlers::post_handler())
             .push(handlers::head_handler())
@@ -294,7 +397,9 @@ impl Tus {
 
 // Hooks
 impl Tus {
-    pub fn with_upload_id_naming_function<F, Fut>(mut self, f: F) -> Self
+    /// Sets the function used to derive the upload ID from an incoming `POST`.
+    #[must_use]
+    pub fn upload_id_naming_function<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(&Request, Option<Metadata>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<String, TusError>> + Send + 'static,
@@ -303,7 +408,10 @@ impl Tus {
         self
     }
 
-    pub fn with_generate_url_function<F>(mut self, f: F) -> Self
+    /// Sets the function that generates the upload location URL returned in the
+    /// `Location` header.
+    #[must_use]
+    pub fn generate_url_function<F>(mut self, f: F) -> Self
     where
         F: Fn(&Request, GenerateUrlCtx) -> Result<String, TusError> + Send + Sync + 'static,
     {
@@ -314,7 +422,9 @@ impl Tus {
 
 // Lifecycle
 impl Tus {
-    pub fn with_on_incoming_request<F, Fut>(mut self, f: F) -> Self
+    /// Sets an async hook that runs at the start of every tus request.
+    #[must_use]
+    pub fn on_incoming_request<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(&Request, String) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -323,7 +433,9 @@ impl Tus {
         self
     }
 
-    pub fn with_on_incoming_request_sync<F>(mut self, f: F) -> Self
+    /// Sets a synchronous hook that runs at the start of every tus request.
+    #[must_use]
+    pub fn on_incoming_request_sync<F>(mut self, f: F) -> Self
     where
         F: Fn(&Request, String) + Send + Sync + 'static,
     {
@@ -334,7 +446,9 @@ impl Tus {
         self
     }
 
-    pub fn with_on_upload_create<F, Fut>(mut self, f: F) -> Self
+    /// Sets the hook invoked when a new upload is being created.
+    #[must_use]
+    pub fn on_upload_create<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(&Request, UploadInfo) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<UploadPatch, TusError>> + Send + 'static,
@@ -343,7 +457,9 @@ impl Tus {
         self
     }
 
-    pub fn with_on_upload_finish<F, Fut>(mut self, f: F) -> Self
+    /// Sets the hook invoked when an upload completes.
+    #[must_use]
+    pub fn on_upload_finish<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(&Request, UploadInfo) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<UploadFinishPatch, TusError>> + Send + 'static,
@@ -380,6 +496,32 @@ mod tests {
         assert_eq!(CancellationReason::Abort, CancellationReason::Abort);
         assert_eq!(CancellationReason::Cancel, CancellationReason::Cancel);
         assert_ne!(CancellationReason::Abort, CancellationReason::Cancel);
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn test_into_router_warns_on_absolute_location_without_canonical_origin() {
+        let _ = Tus::new().relative_location(false).into_router();
+        assert!(logs_contain(
+            "no canonical_origin; absolute Location headers will be derived from"
+        ));
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn test_into_router_does_not_warn_when_relative_location_is_true() {
+        let _ = Tus::new().relative_location(true).into_router();
+        assert!(!logs_contain("canonical_origin"));
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn test_into_router_does_not_warn_when_canonical_origin_is_set() {
+        let _ = Tus::new()
+            .relative_location(false)
+            .canonical_origin("https://uploads.example.com")
+            .into_router();
+        assert!(!logs_contain("no canonical_origin"));
     }
 
     #[test]
@@ -489,7 +631,7 @@ mod tests {
     #[test]
     fn test_cancellation_context_debug() {
         let ctx = CancellationContext::new();
-        let debug = format!("{:?}", ctx);
+        let debug = format!("{ctx:?}");
         assert!(debug.contains("CancellationContext"));
     }
 
@@ -557,19 +699,41 @@ mod tests {
     }
 
     #[test]
-    fn test_tus_with_locker() {
+    fn test_tus_locker() {
         use lockers::memory_locker::MemoryLocker;
 
-        let tus = Tus::new().with_locker(MemoryLocker::new());
+        let tus = Tus::new().locker(MemoryLocker::new());
         // Just verify it compiles and doesn't panic
         assert!(Arc::strong_count(&tus.options.locker) >= 1);
     }
 
     #[test]
-    fn test_tus_with_store() {
-        let tus = Tus::new().with_store(stores::DiskStore::new());
+    fn test_tus_store() {
+        let tus = Tus::new().store(stores::DiskStore::new());
         // Just verify it compiles and doesn't panic
         assert!(Arc::strong_count(&tus.store) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_tus_storage_root_uses_custom_directory() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let tus = Tus::new().storage_root(temp_dir.path());
+
+        let info = UploadInfo {
+            id: "storage-root-test".to_owned(),
+            size: Some(0),
+            offset: Some(0),
+            metadata: None,
+            storage: None,
+            creation_date: "2024-01-01T00:00:00Z".to_owned(),
+        };
+
+        let created = tus.store.create(info).await.unwrap();
+        let stored_path = created.storage.unwrap().path;
+        assert!(
+            stored_path.starts_with(&*temp_dir.path().to_string_lossy()),
+            "expected upload to live under custom root, got {stored_path}"
+        );
     }
 
     #[test]
@@ -582,7 +746,7 @@ mod tests {
     #[test]
     fn test_tus_clone() {
         let tus = Tus::new().path("/test");
-        let cloned = tus.clone();
+        let cloned = tus;
         assert_eq!(cloned.options.path, "/test");
     }
 
@@ -602,10 +766,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tus_with_upload_id_naming_function() {
-        let tus = Tus::new().with_upload_id_naming_function(|_req, _meta| async move {
-            Ok("custom-id".to_owned())
-        });
+    async fn test_tus_upload_id_naming_function() {
+        let tus = Tus::new()
+            .upload_id_naming_function(|_req, _meta| async move { Ok("custom-id".to_owned()) });
 
         // Verify the function is set by calling it
         let req = Request::default();
@@ -613,24 +776,44 @@ mod tests {
         assert_eq!(result.unwrap(), "custom-id");
     }
 
+    #[tokio::test]
+    async fn test_tus_rejects_unsafe_generated_upload_id_as_bad_request() {
+        use salvo_core::Service;
+        use salvo_core::http::StatusCode;
+        use salvo_core::test::TestClient;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let tus = Tus::new()
+            .store(stores::DiskStore::new().disk_root(temp_dir.path()))
+            .upload_id_naming_function(|_req, _meta| async move { Ok("file.txt".to_owned()) });
+        let service = Service::new(tus.into_router());
+
+        let response = TestClient::post("http://localhost/tus-files")
+            .add_header(H_TUS_RESUMABLE, TUS_VERSION, true)
+            .add_header(H_UPLOAD_LENGTH, "0", true)
+            .send(&service)
+            .await;
+
+        assert_eq!(response.status_code.unwrap(), StatusCode::BAD_REQUEST);
+    }
+
     #[test]
-    fn test_tus_with_generate_url_function() {
-        let tus = Tus::new().with_generate_url_function(|_req, ctx| {
-            Ok(format!("https://cdn.example.com/{}", ctx.id))
-        });
+    fn test_tus_generate_url_function() {
+        let tus = Tus::new()
+            .generate_url_function(|_req, ctx| Ok(format!("https://cdn.example.com/{}", ctx.id)));
 
         assert!(tus.options.generate_url_function.is_some());
     }
 
     #[tokio::test]
-    async fn test_tus_with_on_incoming_request() {
+    async fn test_tus_on_incoming_request() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
-        let tus = Tus::new().with_on_incoming_request(move |_req, _id| {
+        let tus = Tus::new().on_incoming_request(move |_req, _id| {
             let called = called_clone.clone();
             async move {
                 called.store(true, Ordering::SeqCst);
@@ -644,14 +827,14 @@ mod tests {
     }
 
     #[test]
-    fn test_tus_with_on_incoming_request_sync() {
+    fn test_tus_on_incoming_request_sync() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let called = Arc::new(AtomicBool::new(false));
-        let called_clone = called.clone();
+        let called_clone = called;
 
-        let tus = Tus::new().with_on_incoming_request_sync(move |_req, _id| {
+        let tus = Tus::new().on_incoming_request_sync(move |_req, _id| {
             called_clone.store(true, Ordering::SeqCst);
         });
 
@@ -659,17 +842,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tus_with_on_upload_create() {
-        let tus = Tus::new()
-            .with_on_upload_create(|_req, _upload| async move { Ok(UploadPatch::default()) });
+    async fn test_tus_on_upload_create() {
+        let tus =
+            Tus::new().on_upload_create(|_req, _upload| async move { Ok(UploadPatch::default()) });
 
         assert!(tus.options.on_upload_create.is_some());
     }
 
     #[tokio::test]
-    async fn test_tus_with_on_upload_finish() {
+    async fn test_tus_on_upload_finish() {
         let tus = Tus::new()
-            .with_on_upload_finish(|_req, _upload| async move { Ok(UploadFinishPatch::default()) });
+            .on_upload_finish(|_req, _upload| async move { Ok(UploadFinishPatch::default()) });
 
         assert!(tus.options.on_upload_finish.is_some());
     }

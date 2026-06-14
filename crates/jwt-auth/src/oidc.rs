@@ -1,15 +1,14 @@
-//! Oidc(OpenID Connect) supports.
+//! OIDC (OpenID Connect) support.
 
 use std::fmt::{self, Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use hyper_util::rt::TokioExecutor;
@@ -20,6 +19,7 @@ use salvo_core::http::{header::CACHE_CONTROL, uri::Uri};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::{Notify, RwLock};
+use tokio::time::timeout;
 
 use super::{JwtAuthDecoder, JwtAuthError};
 
@@ -28,6 +28,10 @@ mod cache;
 pub use cache::{CachePolicy, CacheState, JwkSetStore, UpdateAction};
 
 pub(super) type HyperClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
+
+const OIDC_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+const OIDC_CONFIG_MAX_BYTES: usize = 64 * 1024;
+const OIDC_JWKS_MAX_BYTES: usize = 1024 * 1024;
 
 fn default_http_client() -> Result<HyperClient, JwtAuthError> {
     let https = HttpsConnectorBuilder::new()
@@ -49,7 +53,7 @@ fn resolve_or_else<T, E>(
     }
 }
 
-/// ConstDecoder will decode token with a static secret.
+/// Decodes JWTs using OpenID Connect discovery and JWKS.
 #[derive(Clone)]
 pub struct OidcDecoder {
     issuer: String,
@@ -72,7 +76,7 @@ impl Debug for OidcDecoder {
 impl JwtAuthDecoder for OidcDecoder {
     type Error = JwtAuthError;
 
-    /// Validates a JWT, Returning the claims serialized into type of T
+    /// Validates a JWT, returning the claims deserialized into type `T`.
     async fn decode<C>(&self, token: &str, _depot: &mut Depot) -> Result<TokenData<C>, Self::Error>
     where
         C: DeserializeOwned + Clone,
@@ -100,6 +104,9 @@ where
     pub validation: Option<Validation>,
     /// The expected OIDC token audiences.
     pub audiences: Option<Vec<String>>,
+    /// Whether to accept symmetric (`kty: "oct"` / HS*) keys served by
+    /// the JWKS endpoint. Disabled by default.
+    pub allow_symmetric_jwks: bool,
 }
 impl<T: AsRef<str>> Debug for DecoderBuilder<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -107,6 +114,7 @@ impl<T: AsRef<str>> Debug for DecoderBuilder<T> {
             .field("http_client", &self.http_client)
             .field("validation", &self.validation)
             .field("audiences", &self.audiences)
+            .field("allow_symmetric_jwks", &self.allow_symmetric_jwks)
             .finish()
     }
 }
@@ -122,6 +130,7 @@ where
             http_client: None,
             validation: None,
             audiences: None,
+            allow_symmetric_jwks: false,
         }
     }
     /// Set the http client for the decoder.
@@ -155,40 +164,53 @@ where
         self
     }
 
+    /// Allow symmetric (`kty: "oct"` / HS*) keys to be loaded from the
+    /// JWKS endpoint.
+    ///
+    /// **Disabled by default.** OIDC JWKS endpoints normally publish only
+    /// asymmetric public keys (RSA / EC / OKP). Accepting symmetric keys
+    /// widens the trust surface — a leaked or substituted shared secret
+    /// would let an attacker mint tokens the decoder accepts. Enable this
+    /// only when the issuer is known to publish HS* keys and is trusted
+    /// to keep them secret.
+    #[must_use]
+    pub fn allow_symmetric_jwks(mut self, allow: bool) -> Self {
+        self.allow_symmetric_jwks = allow;
+        self
+    }
+
     /// Build a `OidcDecoder`.
-    pub fn build(self) -> impl Future<Output = Result<OidcDecoder, JwtAuthError>> {
-        async move {
-            let Self {
-                issuer,
-                http_client,
-                validation,
-                audiences,
-            } = self;
-            let raw_issuer = issuer.as_ref();
+    pub async fn build(self) -> Result<OidcDecoder, JwtAuthError> {
+        let Self {
+            issuer,
+            http_client,
+            validation,
+            audiences,
+            allow_symmetric_jwks,
+        } = self;
+        let raw_issuer = issuer.as_ref();
 
-            //Create an empty JWKS to initialize our Cache
-            let jwks = JwkSet { keys: Vec::new() };
+        //Create an empty JWKS to initialize our Cache
+        let jwks = JwkSet { keys: Vec::new() };
 
-            let validation =
-                configure_oidc_validation(validation.unwrap_or_default(), raw_issuer, audiences)?;
-            let issuer = raw_issuer.trim_end_matches('/').to_owned();
-            let cache = Arc::new(RwLock::new(JwkSetStore::new(
-                jwks,
-                CachePolicy::default(),
-                validation,
-            )));
-            let cache_state = Arc::new(CacheState::new());
-            let http_client = resolve_or_else(http_client, default_http_client)?;
-            let decoder = OidcDecoder {
-                issuer,
-                http_client,
-                cache,
-                cache_state,
-                notifier: Arc::new(Notify::new()),
-            };
-            decoder.update_cache().await?;
-            Ok(decoder)
-        }
+        let validation =
+            configure_oidc_validation(validation.unwrap_or_default(), raw_issuer, audiences)?;
+        let issuer = raw_issuer.trim_end_matches('/').to_owned();
+        let cache = Arc::new(RwLock::new(
+            JwkSetStore::new(jwks, CachePolicy::default(), validation)
+                .with_allow_symmetric_jwks(allow_symmetric_jwks),
+        ));
+        let cache_state = Arc::new(CacheState::new());
+        let http_client = resolve_or_else(http_client, default_http_client)?;
+        let decoder = OidcDecoder {
+            issuer,
+            http_client,
+            cache,
+            cache_state,
+            notifier: Arc::new(Notify::new()),
+        };
+        decoder.update_cache().await?;
+        Ok(decoder)
     }
 }
 
@@ -213,11 +235,16 @@ impl OidcDecoder {
         format!("{}/.well-known/openid-configuration", &self.issuer)
     }
     async fn get_config(&self) -> Result<OidcConfig, JwtAuthError> {
-        let res = self
-            .http_client
-            .get(self.config_url().parse::<Uri>()?)
-            .await?;
-        let body = res.into_body().collect().await?.to_bytes();
+        let res = timeout(
+            OIDC_HTTP_TIMEOUT,
+            self.http_client.get(self.config_url().parse::<Uri>()?),
+        )
+        .await
+        .map_err(|_| JwtAuthError::OidcHttpTimeout)??;
+        if !res.status().is_success() {
+            return Err(JwtAuthError::OidcHttpStatus(res.status()));
+        }
+        let body = collect_limited_body(res.into_body(), OIDC_CONFIG_MAX_BYTES).await?;
         let config = serde_json::from_slice(&body)?;
         Ok(config)
     }
@@ -230,7 +257,12 @@ impl OidcDecoder {
         let uri = self.jwks_uri().await?.parse::<Uri>()?;
         // Get the jwks endpoint
         tracing::debug!("Requesting JWKS From Uri: {uri}");
-        let res = self.http_client.get(uri).await?;
+        let res = timeout(OIDC_HTTP_TIMEOUT, self.http_client.get(uri))
+            .await
+            .map_err(|_| JwtAuthError::OidcHttpTimeout)??;
+        if !res.status().is_success() {
+            return Err(JwtAuthError::OidcHttpStatus(res.status()));
+        }
 
         let cache_policy = {
             // Determine it from the cache_control header
@@ -238,7 +270,7 @@ impl OidcDecoder {
             let cache_policy = CachePolicy::from_header_val(cache_control);
             Some(cache_policy)
         };
-        let jwks = res.into_body().collect().await?.to_bytes();
+        let jwks = collect_limited_body(res.into_body(), OIDC_JWKS_MAX_BYTES).await?;
 
         let fetched_at = current_time();
         Ok(JwkSetFetch {
@@ -291,7 +323,7 @@ impl OidcDecoder {
         }
     }
 
-    /// If we are currently updating the JWKS in the background this function will resolve when the update it complete
+    /// If the JWKS is currently updating in the background, this function resolves when the update is complete.
     /// If we are not currently updating the JWKS in the background, this function will resolve immediately.
     async fn wait_update(&self) {
         if self.cache_state.is_revalidating() {
@@ -309,18 +341,19 @@ impl OidcDecoder {
             // if we have it, then return it
             Ok(key)
         } else {
-            // Try and invalidate our cache. Maybe the JWKS has changed or our cached values expired
-            // Even if it failed it. It may allow us to retrieve a key from stale-if-error
+            // Try to invalidate our cache. Maybe the JWKS has changed or our cached values expired.
+            // Even if it fails, stale-if-error may still let us retrieve a key.
             self.revalidate_cache();
             self.wait_update().await;
             self.get_kid(kid).await?.ok_or(JwtAuthError::CacheError)
         }
     }
 
-    /// Gets the decoding components of a JWK by kid from the JWKS in our cache
+    /// Gets the decoding components of a JWK by kid from the JWKS in our cache.
     /// Returns an Error, if the cache is stale and beyond the Stale While Revalidate and Stale If Error allowances configured in [`crate::cache::Settings`]
-    /// Returns Ok if the cache is not stale.
-    /// Returns Ok after triggering a background update of the JWKS If the cache is stale but within the Stale While Revalidate and Stale If Error allowances.
+    /// Returns `Ok` if the cache is not stale.
+    /// Returns `Ok` after triggering a background JWKS update if the cache is stale but within the
+    /// stale-while-revalidate and stale-if-error allowances.
     #[allow(clippy::future_not_send)]
     async fn get_kid(&self, kid: &str) -> Result<Option<Arc<DecodingInfo>>, JwtAuthError> {
         let read_cache = self.cache.read().await;
@@ -431,7 +464,7 @@ impl DecodingInfo {
         match jsonwebtoken::decode::<T>(token, &self.key, &self.validation) {
             Ok(data) => Ok(data),
             Err(e) => {
-                tracing::error!(error = ?e, token, "error decoding jwt token");
+                tracing::error!(error = ?e, "error decoding jwt token");
                 Err(JwtAuthError::from(e))
             }
         }
@@ -452,9 +485,28 @@ struct OidcConfig {
     jwks_uri: String,
 }
 
+async fn collect_limited_body(
+    body: salvo_core::hyper::body::Incoming,
+    max_size: usize,
+) -> Result<Bytes, JwtAuthError> {
+    let limited = Limited::new(body, max_size);
+    let collected = timeout(OIDC_HTTP_TIMEOUT, limited.collect())
+        .await
+        .map_err(|_| JwtAuthError::OidcHttpTimeout)?
+        .map_err(|error| {
+            if error.is::<http_body_util::LengthLimitError>() {
+                JwtAuthError::OidcResponseTooLarge(max_size)
+            } else {
+                JwtAuthError::OidcBodyRead(error)
+            }
+        })?;
+    Ok(collected.to_bytes())
+}
+
 pub(crate) fn decode_jwk(
     jwk: &Jwk,
     validation: &Validation,
+    allow_symmetric_jwks: bool,
 ) -> Result<(String, DecodingInfo), JwtAuthError> {
     let kid = jwk.common.key_id.clone();
     let alg = jwk.common.key_algorithm;
@@ -473,6 +525,14 @@ pub(crate) fn decode_jwk(
             DecodingKey::from_rsa_components(&params.n, &params.e).ok()
         }
         jsonwebtoken::jwk::AlgorithmParameters::OctetKey(ref params) => {
+            if !allow_symmetric_jwks {
+                tracing::warn!(
+                    kid = ?kid,
+                    "rejecting symmetric (oct) JWK; OIDC JWKS should publish public keys. \
+                     Enable allow_symmetric_jwks(true) on the decoder builder to opt in."
+                );
+                return Err(JwtAuthError::InvalidJwk);
+            }
             DecodingKey::from_base64_secret(&params.value).ok()
         }
         jsonwebtoken::jwk::AlgorithmParameters::OctetKeyPair(ref params) => {
@@ -529,8 +589,37 @@ mod tests {
         });
         let jwk: Jwk = serde_json::from_value(jwk_json).unwrap();
         let validation = Validation::new(Algorithm::RS256);
-        let result = decode_jwk(&jwk, &validation);
+        let result = decode_jwk(&jwk, &validation, false);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_jwk_rejects_symmetric_by_default() {
+        // valid base64url of "secret"
+        let jwk_json = json!({
+            "kty": "oct",
+            "kid": "test-oct",
+            "alg": "HS256",
+            "k": "c2VjcmV0"
+        });
+        let jwk: Jwk = serde_json::from_value(jwk_json).unwrap();
+        let validation = Validation::new(Algorithm::HS256);
+        let result = decode_jwk(&jwk, &validation, false);
+        assert!(matches!(result, Err(JwtAuthError::InvalidJwk)));
+    }
+
+    #[test]
+    fn test_decode_jwk_accepts_symmetric_when_opted_in() {
+        let jwk_json = json!({
+            "kty": "oct",
+            "kid": "test-oct",
+            "alg": "HS256",
+            "k": "c2VjcmV0"
+        });
+        let jwk: Jwk = serde_json::from_value(jwk_json).unwrap();
+        let validation = Validation::new(Algorithm::HS256);
+        let result = decode_jwk(&jwk, &validation, true);
+        assert!(result.is_ok());
     }
 
     #[test]

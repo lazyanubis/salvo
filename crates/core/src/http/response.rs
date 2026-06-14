@@ -26,9 +26,30 @@ use crate::http::{StatusCode, StatusError}; // ? unused on wasm32
 use crate::{BoxedError, Error, Scribe};
 
 /// Represents an HTTP response.
+///
+/// # Terminal responses ("stamped")
+///
+/// Several parts of Salvo (notably [`FlowCtrl::call_next`] and the built-in
+/// catcher logic) treat a response as **terminal** — historically called
+/// *stamped* in this codebase — once a status code has been set that signals
+/// the request is finished:
+///
+/// - any 4xx client error,
+/// - any 5xx server error, or
+/// - any 3xx redirection.
+///
+/// When that happens, the remaining handlers in the chain are skipped so a
+/// downstream handler cannot accidentally overwrite the response. [`is_stamped`]
+/// is the predicate used to test this condition; the name is kept for backwards
+/// compatibility, but read it as "is this response in a terminal state?".
+/// Successful (2xx), informational (1xx), and unset status codes are *not*
+/// considered terminal.
+///
+/// [`FlowCtrl::call_next`]: crate::routing::FlowCtrl::call_next
+/// [`is_stamped`]: Response::is_stamped
 #[non_exhaustive]
 pub struct Response {
-    /// The HTTP status code.WebTransportSession
+    /// The HTTP status code.
     pub status_code: Option<StatusCode>,
     /// The HTTP headers.
     pub headers: HeaderMap,
@@ -64,20 +85,20 @@ where
             },
             body,
         ) = res.into_parts();
+        // Per RFC 6265 §3 each cookie is delivered in its own `Set-Cookie` header (folding
+        // is forbidden), and the parts after the first `;` are attributes — not separate
+        // cookies. Parse each `Set-Cookie` header value as one cookie.
         #[cfg(feature = "cookie")]
-        // Set the request cookies, if they exist.
-        let cookies = if let Some(header) = headers.get(http::header::SET_COOKIE) {
+        let cookies = {
             let mut cookie_jar = CookieJar::new();
-            if let Ok(header) = header.to_str() {
-                for cookie_str in header.split(';').map(|s| s.trim()) {
-                    if let Ok(cookie) = Cookie::parse_encoded(cookie_str).map(|c| c.into_owned()) {
-                        cookie_jar.add(cookie);
-                    }
+            for header in headers.get_all(http::header::SET_COOKIE) {
+                if let Ok(header) = header.to_str()
+                    && let Ok(cookie) = Cookie::parse_encoded(header).map(|c| c.into_owned())
+                {
+                    cookie_jar.add(cookie);
                 }
             }
             cookie_jar
-        } else {
-            CookieJar::new()
         };
 
         Self {
@@ -93,7 +114,7 @@ where
 }
 
 impl Response {
-    /// Creates a new blank `Response`.
+    /// Creates a new blank `Response` with the provided cookie jar.
     #[inline]
     #[must_use]
     pub fn new() -> Self {
@@ -141,9 +162,9 @@ impl Response {
 
     /// Modify a header for this response.
     ///
-    /// When `overwrite` is set to `true`, If the header is already present, the value will be
-    /// replaced. When `overwrite` is set to `false`, The new header is always appended to the
-    /// request, even if the header already exists.
+    /// When `overwrite` is set to `true`, if the header is already present, the value will be
+    /// replaced. When `overwrite` is set to `false`, the new header is always appended to the
+    /// response, even if the header already exists.
     pub fn add_header<N, V>(
         &mut self,
         name: N,
@@ -209,13 +230,39 @@ impl Response {
         self.replace_body(ResBody::None)
     }
 
-    /// If returns `true`, it means this response is ready for write back and the reset handlers
-    /// should be skipped.
+    /// Returns `true` when this response is in a *terminal* state — i.e. it
+    /// already has a status code that signals the request is finished, so the
+    /// remaining handlers in the chain should be skipped.
+    ///
+    /// A response is considered terminal when its status code is set to any of:
+    ///
+    /// - a 4xx client error,
+    /// - a 5xx server error, or
+    /// - a 3xx redirection.
+    ///
+    /// Successful (2xx), informational (1xx), and unset status codes return
+    /// `false`. The method name uses "stamped" — internal terminology for
+    /// "this response has had its outcome stamped on it" — and is kept for
+    /// backwards compatibility. See the [type-level docs](Response#terminal-responses-stamped)
+    /// for more.
     #[inline]
     pub fn is_stamped(&self) -> bool {
         self.status_code.is_some_and(|code| {
             code.is_client_error() || code.is_server_error() || code.is_redirection()
         })
+    }
+
+    /// Append every cookie in `cookies.delta()` to `headers` as a `Set-Cookie` header,
+    /// then drain the cookie jar so subsequent calls do not re-emit the same cookies.
+    #[cfg(feature = "cookie")]
+    fn flush_cookies_into(headers: &mut HeaderMap, cookies: &mut CookieJar) {
+        for cookie in cookies.delta() {
+            if let Ok(hv) = cookie.encoded().to_string().parse() {
+                headers.append(http::header::SET_COOKIE, hv);
+            }
+        }
+        // Reset the jar so a follow-up serialization does not duplicate `Set-Cookie`.
+        *cookies = CookieJar::new();
     }
 
     /// Convert to hyper response.
@@ -227,7 +274,7 @@ impl Response {
             #[cfg(feature = "cookie")]
             mut headers,
             #[cfg(feature = "cookie")]
-            cookies,
+            mut cookies,
             #[cfg(not(feature = "cookie"))]
             headers,
             body,
@@ -236,11 +283,7 @@ impl Response {
         } = self;
 
         #[cfg(feature = "cookie")]
-        for cookie in cookies.delta() {
-            if let Ok(hv) = cookie.encoded().to_string().parse() {
-                headers.append(http::header::SET_COOKIE, hv);
-            }
-        }
+        Self::flush_cookies_into(&mut headers, &mut cookies);
 
         let status_code = status_code.unwrap_or(match &body {
             ResBody::None => StatusCode::NOT_FOUND,
@@ -259,6 +302,11 @@ impl Response {
     #[doc(hidden)]
     #[inline]
     pub fn strip_to_hyper(&mut self) -> hyper::Response<ResBody> {
+        // Flush any cookies onto `self.headers` *before* we transfer them to the new
+        // hyper response so the tower-compat path does not silently lose `Set-Cookie`.
+        #[cfg(feature = "cookie")]
+        Self::flush_cookies_into(&mut self.headers, &mut self.cookies);
+
         let mut res = hyper::Response::new(std::mem::take(&mut self.body));
         *res.extensions_mut() = std::mem::take(&mut self.extensions);
         *res.headers_mut() = std::mem::take(&mut self.headers);
@@ -307,7 +355,7 @@ impl Response {
         pub fn cookies_mut(&mut self) -> &mut CookieJar {
             &mut self.cookies
         }
-        /// Helper function for get cookie.
+        /// Gets a cookie by name from the response.
         #[inline]
         pub fn cookie<T>(&self, name: T) -> Option<&Cookie<'static>>
         where
@@ -315,14 +363,14 @@ impl Response {
         {
             self.cookies.get(name.as_ref())
         }
-        /// Helper function for add cookie.
+        /// Adds a cookie to the response.
         #[inline]
-        pub fn add_cookie(&mut self, cookie: Cookie<'static>)-> &mut Self {
+        pub fn add_cookie(&mut self, cookie: Cookie<'static>) -> &mut Self {
             self.cookies.add(cookie);
             self
         }
 
-        /// Helper function for remove cookie.
+        /// Removes a cookie from the response.
         ///
         /// Removes `cookie` from this [`CookieJar`]. If an _original_ cookie with the same
         /// name as `cookie` is present in the jar, a _removal_ cookie will be
@@ -345,17 +393,19 @@ impl Response {
         }
     }
 
-    /// Get content type..
+    /// Returns the response `Content-Type`.
     ///
     /// # Example
     ///
     /// ```
-    /// use salvo_core::http::{Response, StatusCode};
+    /// use salvo_core::http::Response;
     ///
     /// let mut res = Response::new();
     /// assert_eq!(None, res.content_type());
-    /// res.headers_mut().insert("content-type", "text/plain".parse().unwrap());
+    /// res.headers_mut()
+    ///     .insert("content-type", "text/plain".parse().unwrap());
     /// assert_eq!(Some(mime::TEXT_PLAIN), res.content_type());
+    /// ```
     #[inline]
     pub fn content_type(&self) -> Option<Mime> {
         self.headers
@@ -381,7 +431,12 @@ impl Response {
         self
     }
 
-    /// Render content.
+    /// Render content into this response.
+    ///
+    /// Delegates to the [`Scribe`] implementation, which writes the body, headers,
+    /// and (if not already set) the `Content-Type`. If serialization fails, the
+    /// `Scribe` impl is responsible for converting the error into a `5xx` response
+    /// instead of panicking or returning an error here.
     ///
     /// # Example
     ///
@@ -398,14 +453,24 @@ impl Response {
         scribe.render(self);
     }
 
-    /// Render content with status code.
+    /// Sets the status code and renders content into this response.
     #[inline]
-    pub fn stuff<P>(&mut self, code: StatusCode, scribe: P)
+    pub fn render_with_status<P>(&mut self, code: StatusCode, scribe: P)
     where
         P: Scribe,
     {
         self.status_code = Some(code);
         scribe.render(self);
+    }
+
+    /// Sets the status code and renders content into this response.
+    #[deprecated(since = "0.94.0", note = "use `Response::render_with_status` instead")]
+    #[inline]
+    pub fn stuff<P>(&mut self, code: StatusCode, scribe: P)
+    where
+        P: Scribe,
+    {
+        self.render_with_status(code, scribe);
     }
 
     /// Attempts to send a file. If file not exists, not found error will occur.
@@ -433,7 +498,7 @@ impl Response {
         match self.body_mut() {
             ResBody::Once(bytes) => {
                 let mut chunks = VecDeque::new();
-                chunks.push_back(bytes.clone());
+                chunks.push_back(std::mem::take(bytes));
                 chunks.push_back(data.into());
                 self.body = ResBody::Chunks(chunks);
             }
@@ -576,5 +641,80 @@ mod test {
         }
 
         assert_eq!("Hello World", &result)
+    }
+
+    #[test]
+    fn test_render_with_status_sets_status_and_body() {
+        let mut res = Response::new();
+        res.render_with_status(StatusCode::CREATED, "created");
+
+        assert_eq!(res.status_code, Some(StatusCode::CREATED));
+        let content_type = res.content_type().expect("content type");
+        assert_eq!(content_type.essence_str(), "text/plain");
+        match res.take_body() {
+            ResBody::Once(bytes) => assert_eq!(bytes, Bytes::from_static(b"created")),
+            body => panic!("expected once body, got {body:?}"),
+        }
+    }
+
+    #[cfg(feature = "cookie")]
+    #[test]
+    fn test_from_hyper_response_preserves_multiple_set_cookie_headers() {
+        let hyper_res = hyper::Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::SET_COOKIE, "sid=abc123; Path=/; HttpOnly")
+            .header(http::header::SET_COOKIE, "lang=en-US; Path=/; SameSite=Lax")
+            .body(ResBody::None)
+            .expect("build hyper response");
+
+        let res = Response::from(hyper_res);
+
+        let names: Vec<_> = res.cookies.iter().map(|c| c.name().to_owned()).collect();
+        assert!(
+            names.contains(&"sid".to_owned()),
+            "missing sid cookie: {names:?}"
+        );
+        assert!(
+            names.contains(&"lang".to_owned()),
+            "missing lang cookie: {names:?}"
+        );
+        // Cookie *attributes* must not be parsed as separate cookies.
+        for ghost in ["Path", "HttpOnly", "SameSite"] {
+            assert!(
+                !names.iter().any(|n| n.eq_ignore_ascii_case(ghost)),
+                "cookie attribute leaked as a cookie: {ghost} in {names:?}"
+            );
+        }
+
+        // The single-cookie attributes should also be preserved.
+        let sid = res.cookies.get("sid").expect("sid cookie present");
+        assert_eq!(sid.value(), "abc123");
+        assert_eq!(sid.http_only(), Some(true));
+    }
+
+    #[cfg(feature = "cookie")]
+    #[test]
+    fn test_strip_to_hyper_emits_set_cookie_for_jar_cookies() {
+        use cookie::Cookie;
+
+        let mut res = Response::new();
+        res.cookies.add(Cookie::new("sid", "abc"));
+        res.cookies.add(Cookie::new("theme", "dark"));
+
+        let hyper_res = res.strip_to_hyper();
+        let cookie_headers: Vec<_> = hyper_res
+            .headers()
+            .get_all(http::header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+
+        assert_eq!(
+            cookie_headers.len(),
+            2,
+            "expected two Set-Cookie headers, got {cookie_headers:?}"
+        );
+        assert!(cookie_headers.iter().any(|v| v.starts_with("sid=abc")));
+        assert!(cookie_headers.iter().any(|v| v.starts_with("theme=dark")));
     }
 }

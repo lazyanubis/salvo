@@ -26,10 +26,7 @@ async fn options(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     }
 
     if max_size > 0 {
-        headers.insert(
-            H_TUS_MAX_SIZE,
-            HeaderValue::from_str(max_size.to_string().as_str()).expect("invalid header value"),
-        );
+        headers.insert(H_TUS_MAX_SIZE, HeaderValue::from(max_size));
     }
 
     headers.insert(
@@ -64,7 +61,7 @@ async fn options(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     res.status_code(StatusCode::NO_CONTENT);
 }
 
-pub fn options_handler() -> Router {
+pub(crate) fn options_handler() -> Router {
     Router::new()
         .options(options)
         .push(Router::with_path("{id}").options(options))

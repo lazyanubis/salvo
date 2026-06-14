@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::fs::Metadata;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::time::SystemTime;
 
@@ -400,9 +400,12 @@ impl Handler for StaticDir {
             }
         }
         let fallback = self.fallback.as_deref().unwrap_or_default();
-        if abs_path.is_none() && !fallback.is_empty() {
+        if abs_path.is_none() && !fallback.is_empty() && is_safe_relative_path(fallback) {
             for root in &self.roots {
                 let raw_path = join_path!(root, fallback);
+                if !Path::new(&raw_path).starts_with(root) {
+                    continue;
+                }
                 if self.exclude_filters.iter().any(|filter| filter(&raw_path)) {
                     continue;
                 }
@@ -556,7 +559,7 @@ fn list_xml(current: &CurrentInfo) -> String {
             let _ = write!(
                 ftxt,
                 "<dir><name>{}</name><modified>{}</modified><link>{}</link></dir>",
-                dir.name,
+                xml_escape(&dir.name),
                 dir.modified.format(&format).expect("format time failed"),
                 encode_url_path(&dir.name),
             );
@@ -565,7 +568,7 @@ fn list_xml(current: &CurrentInfo) -> String {
             let _ = write!(
                 ftxt,
                 "<file><name>{}</name><modified>{}</modified><size>{}</size><link>{}</link></file>",
-                file.name,
+                xml_escape(&file.name),
                 file.modified.format(&format).expect("format time failed"),
                 file.size,
                 encode_url_path(&file.name),
@@ -575,6 +578,30 @@ fn list_xml(current: &CurrentInfo) -> String {
     ftxt.push_str("</list>");
     ftxt
 }
+
+fn is_safe_relative_path(path: &str) -> bool {
+    let path = Path::new(path);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+}
+
+fn xml_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 fn human_size(bytes: u64) -> String {
     let units = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
     let mut index = 0;
@@ -593,34 +620,31 @@ fn human_size(bytes: u64) -> String {
     format!("{} {}", bytes, units[index])
 }
 fn list_html(current: &CurrentInfo) -> String {
-    fn header_link(path: &str) -> String {
-        let segments = path
+    fn header_link(out: &mut String, path: &str) {
+        let _ = write!(out, r#"<a href="/">{HOME_ICON}</a>"#);
+        let mut link = String::new();
+        for seg in path
             .trim_start_matches('/')
             .trim_end_matches('/')
-            .split('/');
-        let mut link = "".to_owned();
-        format!(
-            r#"<a href="/">{}</a>{}"#,
-            HOME_ICON,
-            segments
-                .map(|seg| {
-                    link = format!("{link}/{}", encode_url_path(seg));
-                    format!("/<a href=\"{link}\">{}</a>", encode_url_path(seg))
-                })
-                .collect::<Vec<_>>()
-                .join("")
-        )
+            .split('/')
+        {
+            let encoded = encode_url_path(seg);
+            link.push('/');
+            link.push_str(&encoded);
+            let _ = write!(out, r#"/<a href="{link}">{encoded}</a>"#);
+        }
     }
     let mut ftxt = format!(
         r#"<!DOCTYPE html><html><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width">
         <title>{}</title>
-        <style>{}</style></head><body><header><h3>Index of: {}</h3></header><hr/>"#,
+        <style>{}</style></head><body><header><h3>Index of: "#,
         encode_url_path(&current.path),
         HTML_STYLE,
-        header_link(&current.path)
     );
+    header_link(&mut ftxt, &current.path);
+    let _ = write!(ftxt, "</h3></header><hr/>");
     if current.dirs.is_empty() && current.files.is_empty() {
         let _ = write!(ftxt, "<p>No files</p>");
     } else {
@@ -634,22 +658,24 @@ fn list_html(current: &CurrentInfo) -> String {
         );
         let format = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
         for dir in &current.dirs {
+            let encoded = encode_url_path(&dir.name);
             let _ = write!(
                 ftxt,
                 r#"<tr><td>{}</td><td><a href="./{}/">{}</a></td><td>{}</td><td></td></tr>"#,
                 DIR_ICON,
-                encode_url_path(&dir.name),
-                encode_url_path(&dir.name),
+                encoded,
+                encoded,
                 dir.modified.format(&format).expect("format time failed"),
             );
         }
         for file in &current.files {
+            let encoded = encode_url_path(&file.name);
             let _ = write!(
                 ftxt,
                 r#"<tr><td>{}</td><td><a href="./{}">{}</a></td><td>{}</td><td>{}</td></tr>"#,
                 FILE_ICON,
-                encode_url_path(&file.name),
-                encode_url_path(&file.name),
+                encoded,
+                encoded,
                 file.modified.format(&format).expect("format time failed"),
                 human_size(file.size)
             );
@@ -725,7 +751,7 @@ const HOME_ICON: &str = r#"<svg aria-hidden="true" data-icon="home" viewBox="0 0
 
 #[cfg(test)]
 mod tests {
-    use crate::dir::human_size;
+    use crate::dir::{human_size, is_safe_relative_path, xml_escape};
 
     #[tokio::test]
     async fn test_convert_bytes_to_units() {
@@ -747,5 +773,22 @@ mod tests {
 
         assert_eq!("1 PB", human_size(unit * unit * unit * unit * unit));
         assert_eq!("1 PB", human_size(unit * unit * unit * unit * unit - 1));
+    }
+
+    #[test]
+    fn test_xml_escape() {
+        assert_eq!(
+            xml_escape(r#"<script a="b">'&</script>"#),
+            "&lt;script a=&quot;b&quot;&gt;&apos;&amp;&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn test_fallback_path_must_stay_relative() {
+        assert!(is_safe_relative_path("index.html"));
+        assert!(is_safe_relative_path("./spa/index.html"));
+        assert!(!is_safe_relative_path("../secret.html"));
+        assert!(!is_safe_relative_path("spa/../../secret.html"));
+        assert!(!is_safe_relative_path("/var/www/index.html"));
     }
 }

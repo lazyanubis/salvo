@@ -3,6 +3,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{LazyLock, RwLock};
 
 use salvo_core::Router;
+use salvo_core::http::Method;
+use salvo_core::routing::FilterInfo;
 
 use crate::SecurityRequirement;
 use crate::path::PathItemType;
@@ -103,30 +105,44 @@ impl NormNode {
         }
 
         for filter in router.filters() {
-            let info = format!("{filter:?}");
-            if info.starts_with("path:") {
-                let path = info
-                    .split_once(':')
-                    .expect("split once by ':' should not be get `None`")
-                    .1;
-                node.path = Some(normalize_oapi_path(path));
-            } else if info.starts_with("method:") {
-                match info
-                    .split_once(':')
-                    .expect("split once by ':' should not be get `None`.")
-                    .1
-                {
-                    "GET" => node.method = Some(PathItemType::Get),
-                    "POST" => node.method = Some(PathItemType::Post),
-                    "PUT" => node.method = Some(PathItemType::Put),
-                    "DELETE" => node.method = Some(PathItemType::Delete),
-                    "HEAD" => node.method = Some(PathItemType::Head),
-                    "OPTIONS" => node.method = Some(PathItemType::Options),
-                    "CONNECT" => node.method = Some(PathItemType::Connect),
-                    "TRACE" => node.method = Some(PathItemType::Trace),
-                    "PATCH" => node.method = Some(PathItemType::Patch),
-                    _ => {}
+            match filter.info() {
+                FilterInfo::Path(path) => {
+                    node.path = Some(normalize_oapi_path(&path));
                 }
+                FilterInfo::Method(method) => {
+                    // Only overwrite when the method maps to a known
+                    // `PathItemType`; unknown/extension methods leave any
+                    // previously recognized value in place so combining a
+                    // standard method filter with a custom one does not erase
+                    // the standard mapping (the previous string-parsing path
+                    // had the same behavior via its `_ => {}` arm).
+                    //
+                    // CONNECT is intentionally not mapped: OpenAPI 3.1 does
+                    // not define a `connect` operation under Path Item, so
+                    // emitting one would produce an invalid document.
+                    let item = match method {
+                        Method::GET => Some(PathItemType::Get),
+                        Method::POST => Some(PathItemType::Post),
+                        Method::PUT => Some(PathItemType::Put),
+                        Method::DELETE => Some(PathItemType::Delete),
+                        Method::HEAD => Some(PathItemType::Head),
+                        Method::OPTIONS => Some(PathItemType::Options),
+                        Method::TRACE => Some(PathItemType::Trace),
+                        Method::PATCH => Some(PathItemType::Patch),
+                        _ => None,
+                    };
+                    if item.is_some() {
+                        node.method = item;
+                    } else if method == Method::CONNECT {
+                        tracing::warn!(
+                            "HTTP CONNECT has no OpenAPI 3.1 mapping; the route will be \
+                             omitted from the generated document"
+                        );
+                    }
+                }
+                // Other filter kinds (Scheme/Host/Port/Other) do not carry
+                // information that maps to OpenAPI path items.
+                _ => {}
             }
         }
         node.handler_type_id = router.goal.as_ref().map(|h| h.type_id());
@@ -149,13 +165,13 @@ static METADATA_REGISTRY: LazyLock<MetadataMap> = LazyLock::new(MetadataMap::def
 pub trait RouterExt {
     /// Add security requirement to the router.
     ///
-    /// All endpoints in the router and it's descents will inherit this security requirement.
+    /// All endpoints in the router and its descendants will inherit this security requirement.
     #[must_use]
     fn oapi_security(self, security: SecurityRequirement) -> Self;
 
     /// Add security requirements to the router.
     ///
-    /// All endpoints in the router and it's descents will inherit these security requirements.
+    /// All endpoints in the router and its descendants will inherit these security requirements.
     #[must_use]
     fn oapi_securities<I>(self, security: I) -> Self
     where
@@ -163,13 +179,13 @@ pub trait RouterExt {
 
     /// Add tag to the router.
     ///
-    /// All endpoints in the router and it's descents will inherit this tag.
+    /// All endpoints in the router and its descendants will inherit this tag.
     #[must_use]
     fn oapi_tag(self, tag: impl Into<String>) -> Self;
 
     /// Add tags to the router.
     ///
-    /// All endpoints in the router and it's descents will inherit these tags.
+    /// All endpoints in the router and its descendants will inherit these tags.
     #[must_use]
     fn oapi_tags<I, V>(self, tags: I) -> Self
     where

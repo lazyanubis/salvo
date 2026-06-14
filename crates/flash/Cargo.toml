@@ -32,6 +32,9 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
 
+# CookieStore::new 里面有 key: Key::generate() 会使用 rand
+getrandom = { workspace = true }
+
 [dev-dependencies]
 salvo_core = { workspace = true, features = ["test"] }
 tokio = { workspace = true }

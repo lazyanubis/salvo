@@ -10,7 +10,7 @@ use bytes::Bytes;
 #[cfg(feature = "cookie")]
 use cookie::{Cookie, CookieJar};
 use http::Extensions;
-use http::header::{AsHeaderName, CONTENT_TYPE, HeaderMap, HeaderValue, IntoHeaderName};
+use http::header::{ACCEPT, AsHeaderName, CONTENT_TYPE, HeaderMap, HeaderValue, IntoHeaderName};
 use http::method::Method;
 pub use http::request::Parts;
 use http::uri::{Scheme, Uri};
@@ -52,7 +52,7 @@ pub fn set_global_secure_max_size(size: usize) {
     GLOBAL_SECURE_MAX_SIZE.store(size, Ordering::Relaxed);
 }
 
-/// Middleware for set the secure maximum size of request body.
+/// Middleware to set the secure maximum size of the request body.
 ///
 /// **Note**: The security maximum value applies to request body reads and form parsing,
 /// including multipart file uploads. Increase the limit if you need to accept large uploads.
@@ -329,8 +329,8 @@ impl Request {
 
     /// Returns a mutable reference to the associated URI.
     ///
-    /// *Notice: If you using this mutable reference to change the uri, you should change the
-    /// `params` and `queries` manually.*
+    /// **Note**: If you use this mutable reference to change the URI, you should change the
+    /// `params` and `queries` manually.
     ///
     /// # Examples
     ///
@@ -347,7 +347,7 @@ impl Request {
 
     /// Set the associated URI. `queries` will be reset.
     ///
-    /// *Notice: `params` will not reset.*
+    /// **Note**: `params` will not be reset.
     #[inline]
     pub fn set_uri(&mut self, uri: Uri) {
         self.uri = uri;
@@ -628,6 +628,27 @@ impl Request {
         self.secure_max_size = Some(size);
     }
 
+    /// Wraps the request body in a streaming size limit and also sets the
+    /// request's secure max size.
+    ///
+    /// This is useful for middleware that must enforce the limit even when a
+    /// downstream handler reads the body stream directly instead of using
+    /// [`payload()`](Request::payload) or [`form_data()`](Request::form_data).
+    #[inline]
+    pub fn limit_body(&mut self, max_size: usize) {
+        self.set_secure_max_size(max_size);
+        if self.body.is_none() {
+            return;
+        }
+
+        let body = self.take_body();
+        self.replace_body(ReqBody::Boxed {
+            inner: Box::pin(Limited::new(body, max_size)),
+            #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
+            fusewire: None,
+        });
+    }
+
     /// Returns the maximum allowed body size for this request.
     ///
     /// Returns the request-specific limit if set via
@@ -729,16 +750,16 @@ impl Request {
     /// // types = [text/html, application/json]
     /// ```
     pub fn accept(&self) -> Vec<Mime> {
-        let mut list: Vec<Mime> = vec![];
-        if let Some(accept) = self.headers.get("accept").and_then(|h| h.to_str().ok()) {
-            let parts: Vec<&str> = accept.split(',').collect();
-            for part in parts {
-                if let Ok(mt) = part.parse() {
-                    list.push(mt);
-                }
-            }
-        }
-        list
+        self.headers
+            .get(ACCEPT)
+            .and_then(|h| h.to_str().ok())
+            .map(|accept| {
+                accept
+                    .split(',')
+                    .filter_map(|p| p.trim().parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Returns the first MIME type from the `Accept` header.
@@ -747,12 +768,10 @@ impl Request {
     /// Returns `None` if the `Accept` header is missing or empty.
     #[inline]
     pub fn first_accept(&self) -> Option<Mime> {
-        let mut accept = self.accept();
-        if !accept.is_empty() {
-            Some(accept.remove(0))
-        } else {
-            None
-        }
+        self.headers
+            .get(ACCEPT)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|accept| accept.split(',').find_map(|p| p.trim().parse().ok()))
     }
 
     /// Returns the `Content-Type` header value as a [`Mime`] type.
@@ -1120,7 +1139,7 @@ impl Request {
             .get_or_try_init(|| async {
                 let limited = Limited::new(body, max_size);
                 let collected = limited.collect().await.map_err(|e| {
-                    if e.is::<http_body_util::LengthLimitError>() {
+                    if is_length_limit_error(e.as_ref()) {
                         ParseError::PayloadTooLarge
                     } else {
                         ParseError::other(e)
@@ -1446,6 +1465,26 @@ impl Request {
     }
 }
 
+fn is_length_limit_error(error: &(dyn StdError + 'static)) -> bool {
+    if error.is::<http_body_util::LengthLimitError>() {
+        return true;
+    }
+    if let Some(error) = error.downcast_ref::<std::io::Error>()
+        && let Some(inner) = error.get_ref()
+        && is_length_limit_error(inner)
+    {
+        return true;
+    }
+    let mut source = error.source();
+    while let Some(error) = source {
+        if error.is::<http_body_util::LengthLimitError>() {
+            return true;
+        }
+        source = error.source();
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use serde::{Deserialize, Serialize};
@@ -1550,6 +1589,33 @@ file content\r\n\
         assert_eq!(file.headers().get("content-type").unwrap(), "text/plain");
         let files = req.files("file1").await.unwrap();
         assert_eq!(files[0].name().unwrap(), "err.txt");
+
+        let mut req: Request = TestClient::post("http://127.0.0.1:8698/hello")
+            .add_header(
+                "content-type",
+                "multipart/form-data; boundary=----WebKitFormBoundaryNoPartContentType",
+                true,
+            )
+            .body(
+                "------WebKitFormBoundaryNoPartContentType\r\n\
+Content-Disposition: form-data; name=\"file1\"; filename=\"err.txt\"\r\n\r\n\
+file content\r\n\
+------WebKitFormBoundaryNoPartContentType--\r\n",
+            )
+            .build();
+        let file = req.file("file1").await.unwrap();
+        assert_eq!(file.name().unwrap(), "err.txt");
+    }
+
+    #[tokio::test]
+    async fn test_form_data_multipart_requires_boundary() {
+        let mut req = TestClient::post("http://127.0.0.1:8698/upload")
+            .add_header("content-type", "multipart/form-data", true)
+            .body("ignored")
+            .build();
+
+        let err = req.form_data().await.unwrap_err();
+        assert!(matches!(err, ParseError::InvalidContentType));
     }
 
     /// Test that `form_data()` works correctly after `payload()` has been accessed.

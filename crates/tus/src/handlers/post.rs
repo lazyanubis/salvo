@@ -7,7 +7,7 @@ use salvo_core::{Depot, Request, Response, Router, handler};
 use crate::error::{ProtocolError, TusError};
 use crate::handlers::{Metadata, apply_common_headers};
 use crate::stores::{Extension, UploadInfo};
-use crate::utils::{check_tus_version, parse_u64};
+use crate::utils::{check_tus_version, is_safe_upload_id, parse_u64};
 use crate::{
     CT_OFFSET_OCTET_STREAM, CancellationContext, H_CONTENT_LENGTH, H_CONTENT_TYPE, H_TUS_RESUMABLE,
     H_TUS_VERSION, H_UPLOAD_CONCAT, H_UPLOAD_DEFER_LENGTH, H_UPLOAD_EXPIRES, H_UPLOAD_LENGTH,
@@ -55,14 +55,11 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         return;
     }
 
-    if let Some(value) = upload_defer_length {
-        match value.to_str() {
-            Ok("1") => {}
-            _ => {
-                res.status_code = Some(TusError::Protocol(ProtocolError::InvalidLength).status());
-                return;
-            }
-        }
+    if let Some(value) = upload_defer_length
+        && !matches!(value.to_str(), Ok("1"))
+    {
+        res.status_code = Some(TusError::Protocol(ProtocolError::InvalidLength).status());
+        return;
     }
 
     // Must provide either Upload-Length or Upload-Defer-Length, but not both or neither
@@ -114,27 +111,32 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             return;
         }
     };
+    if !is_safe_upload_id(&upload_id) {
+        res.status_code = Some(TusError::FileIdError.status());
+        return;
+    }
 
     let upload_length_value = match upload_length {
-        Some(value) => match value.to_str() {
-            Ok(v) => match parse_u64(Some(v), H_UPLOAD_LENGTH) {
-                Ok(size) => Some(size),
-                Err(e) => {
-                    res.status_code = Some(TusError::Protocol(e).status());
-                    return;
+        Some(value) => {
+            if let Ok(v) = value.to_str() {
+                match parse_u64(Some(v), H_UPLOAD_LENGTH) {
+                    Ok(size) => Some(size),
+                    Err(e) => {
+                        res.status_code = Some(TusError::Protocol(e).status());
+                        return;
+                    }
                 }
-            },
-            Err(_) => {
+            } else {
                 res.status_code =
                     Some(TusError::Protocol(ProtocolError::InvalidInt(H_UPLOAD_LENGTH)).status());
                 return;
             }
-        },
+        }
         None => None,
     };
 
     let max_file_size = opts
-        .get_configured_max_size(req, Some(upload_id.to_owned()))
+        .get_configured_max_size(req, Some(upload_id.clone()))
         .await;
 
     if let Some(size) = upload_length_value
@@ -193,22 +195,23 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 
         if creation_with_upload {
             let content_length = match req.headers().get(H_CONTENT_LENGTH) {
-                Some(value) => match value.to_str() {
-                    Ok(v) => match parse_u64(Some(v), H_CONTENT_LENGTH) {
-                        Ok(size) => Some(size),
-                        Err(e) => {
-                            res.status_code = Some(TusError::Protocol(e).status());
-                            return;
+                Some(value) => {
+                    if let Ok(v) = value.to_str() {
+                        match parse_u64(Some(v), H_CONTENT_LENGTH) {
+                            Ok(size) => Some(size),
+                            Err(e) => {
+                                res.status_code = Some(TusError::Protocol(e).status());
+                                return;
+                            }
                         }
-                    },
-                    Err(_) => {
+                    } else {
                         res.status_code = Some(
                             TusError::Protocol(ProtocolError::InvalidInt(H_CONTENT_LENGTH))
                                 .status(),
                         );
                         return;
                     }
-                },
+                }
                 None => None,
             };
 
@@ -241,22 +244,17 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             };
 
             upload.offset = Some(written);
-            res.headers.insert(
-                H_UPLOAD_OFFSET,
-                HeaderValue::from_str(&written.to_string()).unwrap(),
-            );
+            res.headers
+                .insert(H_UPLOAD_OFFSET, HeaderValue::from(written));
         }
 
-        upload.size.is_some_and(|x| x == 0) && !upload.get_size_is_deferred()
+        upload.size.is_some_and(|x| x == 0) && !upload.is_size_deferred()
             || creation_with_upload && upload.size.is_some_and(|x| x == upload.offset.unwrap_or(0))
     };
 
-    let url = match opts.generate_upload_url(req, &upload_id) {
-        Ok(url) => url,
-        Err(_) => {
-            res.status_code = Some(TusError::GenerateUploadURLError.status());
-            return;
-        }
+    let Ok(url) = opts.generate_upload_url(req, &upload_id) else {
+        res.status_code = Some(TusError::GenerateUploadURLError.status());
+        return;
     };
 
     tracing::info!("Generated file url: {}", &url);
@@ -277,10 +275,9 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         {
             let expires = created_at.with_timezone(&chrono::Utc) + delta;
             let expires_value = expires.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
-            res.headers.insert(
-                H_UPLOAD_EXPIRES,
-                HeaderValue::from_str(&expires_value).unwrap(),
-            );
+            if let Ok(v) = HeaderValue::from_str(&expires_value) {
+                res.headers.insert(H_UPLOAD_EXPIRES, v);
+            }
         }
     }
 
@@ -318,9 +315,18 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // expires. If expiration is known at creation time, Upload-Expires header MUST be included
     // in the response
 
-    if res.status_code == Some(StatusCode::CREATED) || res.status_code.unwrap().is_redirection() {
-        res.headers
-            .insert("Location", HeaderValue::from_str(&url).unwrap());
+    let should_set_location = matches!(res.status_code, Some(StatusCode::CREATED))
+        || res.status_code.is_some_and(|s| s.is_redirection());
+    if should_set_location {
+        if let Ok(v) = HeaderValue::from_str(&url) {
+            res.headers.insert("Location", v);
+        } else {
+            res.status_code = Some(
+                TusError::Internal("Generated upload URL is not a valid header value".into())
+                    .status(),
+            );
+            return;
+        }
     }
 
     if res.body.is_none() {
@@ -336,6 +342,6 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     }
 }
 
-pub fn post_handler() -> Router {
+pub(crate) fn post_handler() -> Router {
     Router::new().post(create)
 }

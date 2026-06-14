@@ -237,8 +237,8 @@ mod tests {
 
         // Try to get the key to give time to the eviction listener to run.
         for _ in 0..10 {
-            store.load_entry(&"key1".to_owned()).await;
-            store.load_entry(&"key2".to_owned()).await;
+            store.load_entry(&_depot, &"key1".to_owned()).await;
+            store.load_entry(&_depot, &"key2".to_owned()).await;
             if evicted.load(Ordering::SeqCst) {
                 break;
             }

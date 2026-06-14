@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::filters::{self, FnFilter, PathFilter};
-use super::{DetectMatched, Filter, PathState};
+use super::{DetectMatched, Filter, FilterInfo, PathState};
 use crate::handler::{Handler, WhenHoop};
 use crate::http::uri::Scheme;
 use crate::{Depot, Request};
@@ -167,16 +167,16 @@ impl Router {
         self
     }
 
-    /// Add a handler as middleware, it will run the handler in current router or it's descendants
-    /// handle the request.
+    /// Add a handler as middleware. It runs the handler in the current router or its
+    /// descendants when handling the request.
     #[inline]
     #[must_use]
     pub fn with_hoop<H: Handler>(hoop: H) -> Self {
         Self::new().hoop(hoop)
     }
 
-    /// Add a handler as middleware, it will run the handler in current router or it's descendants
-    /// handle the request. This middleware is only effective when the filter returns true..
+    /// Add a handler as middleware. It runs the handler in the current router or its
+    /// descendants when handling the request, but only when the filter returns `true`.
     #[inline]
     #[must_use]
     pub fn with_hoop_when<H, F>(hoop: H, filter: F) -> Self
@@ -187,8 +187,8 @@ impl Router {
         Self::new().hoop_when(hoop, filter)
     }
 
-    /// Add a handler as middleware, it will run the handler in current router or it's descendants
-    /// handle the request.
+    /// Add a handler as middleware. It runs the handler in the current router or its
+    /// descendants when handling the request.
     #[inline]
     #[must_use]
     pub fn hoop<H: Handler>(mut self, hoop: H) -> Self {
@@ -196,8 +196,8 @@ impl Router {
         self
     }
 
-    /// Add a handler as middleware, it will run the handler in current router or it's descendants
-    /// handle the request. This middleware is only effective when the filter returns true..
+    /// Add a handler as middleware. It runs the handler in the current router or its
+    /// descendants when handling the request, but only when the filter returns `true`.
     #[inline]
     #[must_use]
     pub fn hoop_when<H, F>(mut self, hoop: H, filter: F) -> Self
@@ -293,8 +293,8 @@ impl Router {
         self
     }
 
-    /// When you want write router chain, this function will be useful,
-    /// You can write your custom logic in FnOnce.
+    /// Runs a closure with this router and returns the closure result.
+    /// Useful for composing router chains conditionally.
     #[inline]
     #[must_use]
     pub fn then<F>(self, func: F) -> Self
@@ -306,7 +306,7 @@ impl Router {
 
     /// Add a [`SchemeFilter`] to current router.
     ///
-    /// [`SchemeFilter`]: super::filters::HostFilter
+    /// [`SchemeFilter`]: super::filters::SchemeFilter
     #[inline]
     #[must_use]
     pub fn scheme(self, scheme: Scheme) -> Self {
@@ -427,23 +427,19 @@ const SYMBOL_RIGHT: &str = "─";
 impl Debug for Router {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         fn print(f: &mut Formatter, prefix: &str, last: bool, router: &Router) -> fmt::Result {
-            let mut path = "".to_owned();
+            let mut path = String::new();
             let mut others = Vec::with_capacity(router.filters.len());
             if router.filters.is_empty() {
                 "!NULL!".clone_into(&mut path);
             } else {
                 for filter in &router.filters {
-                    let info = format!("{filter:?}");
-                    if info.starts_with("path:") {
-                        info.split_once(':')
-                            .expect("`split_once` get `None`")
-                            .1
-                            .clone_into(&mut path)
-                    } else {
-                        let mut parts = info.splitn(2, ':').collect::<Vec<_>>();
-                        if !parts.is_empty() {
-                            others.push(parts.pop().expect("part should exists.").to_owned());
-                        }
+                    match filter.info() {
+                        FilterInfo::Path(p) => path = p,
+                        FilterInfo::Method(m) => others.push(format!("{m:?}")),
+                        FilterInfo::Scheme(s) => others.push(format!("{s:?}")),
+                        FilterInfo::Host(h) => others.push(format!("{h:?}")),
+                        FilterInfo::Port(p) => others.push(format!("{p:?}")),
+                        FilterInfo::Other(_) => others.push(format!("{filter:?}")),
                     }
                 }
             }

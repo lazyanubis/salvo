@@ -74,7 +74,7 @@ impl AllowOrigin {
         Self(OriginInner::Dynamic(Arc::new(c)))
     }
 
-    /// Set the allowed origins by a async closure
+    /// Set the allowed origins by an async closure.
     ///
     /// See [`Cors::allow_origin`] for more details.
     ///
@@ -248,13 +248,13 @@ fn wildcard_origin_matches(pattern: &HeaderValue, origin: &HeaderValue) -> bool 
 
     if let Some(pattern_scheme) = pattern_parts.scheme {
         if !pattern_scheme.eq_ignore_ascii_case(origin_parts.scheme) {
-            return false;
-        }
+        return false;
+    }
     }
     if let Some(pattern_port) = pattern_parts.port {
         if Some(pattern_port) != origin_parts.port {
-            return false;
-        }
+        return false;
+    }
     }
 
     let suffix = &pattern_parts.host_pattern[1..];

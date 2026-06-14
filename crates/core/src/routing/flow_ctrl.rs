@@ -4,17 +4,40 @@ use std::sync::Arc;
 use crate::http::{Request, Response};
 use crate::{Depot, Handler};
 
-/// Control the flow of execute handlers.
+/// Controls execution of a matched handler chain.
 ///
-/// When a request is coming, [`Router`] will detect it and get the matched router.
-/// And then salvo will collect all handlers (including added as middlewares) from the matched
-/// router tree. All handlers in this list will executed one by one.
+/// When a request arrives, [`Router`] matches it against the routing tree. Salvo
+/// then collects the matched goal handler and all middleware handlers from the
+/// matched route branch. Handlers in that list are executed in order.
 ///
-/// Each handler can use `FlowCtrl` to control execute flow, let the flow call next handler or skip
-/// all rest handlers.
+/// Most middleware only needs to read or write request state and then return.
+/// Use [`FlowCtrl::call_next`] for around-style middleware that needs to run
+/// logic after later handlers have finished, or [`FlowCtrl::skip_rest`] to stop
+/// the remaining handlers.
 ///
-/// **NOTE**: When `Response`'s status code is set, and the status code [`Response::is_stamped()`]
-/// is returns false, all remaining handlers will be skipped.
+/// **Note:** when the response becomes stamped, remaining handlers are skipped.
+/// See [`Response::is_stamped`] for the exact status-code behavior.
+///
+/// # Example
+///
+/// ```
+/// use salvo_core::http::header::{HeaderValue, SERVER};
+/// use salvo_core::prelude::*;
+///
+/// #[handler]
+/// async fn add_server_header(
+///     req: &mut Request,
+///     depot: &mut Depot,
+///     res: &mut Response,
+///     ctrl: &mut FlowCtrl,
+/// ) {
+///     ctrl.call_next(req, depot, res).await;
+///     if !ctrl.is_ceased() {
+///         res.headers_mut()
+///             .insert(SERVER, HeaderValue::from_static("salvo"));
+///     }
+/// }
+/// ```
 ///
 /// [`Router`]: crate::routing::Router
 #[derive(Default)]
@@ -47,18 +70,26 @@ impl FlowCtrl {
             handlers,
         }
     }
-    /// Has next handler.
+    /// Returns whether there is another handler in the chain.
     #[inline]
     #[must_use]
     pub fn has_next(&self) -> bool {
         self.cursor < self.handlers.len() // && !self.handlers.is_empty()
     }
 
-    /// Call next handler. If get next handler and executed, returns `true``, otherwise returns
-    /// `false`.
+    /// Runs the next handler in the chain.
     ///
-    /// **NOTE**: If response status code is error or is redirection, all reset handlers will be
-    /// skipped.
+    /// Returns `true` if at least one handler ran, and `false` if there was no
+    /// remaining handler to dispatch to.
+    ///
+    /// **NOTE**: If the response is already in a terminal state (an error or
+    /// redirection status code, as reported by [`Response::is_stamped`]) when this
+    /// method is called — or becomes terminal after a handler runs — the remaining
+    /// handlers are skipped. The first call to `call_next` latches whether catcher
+    /// mode is active, so subsequent calls behave consistently within the same
+    /// request.
+    ///
+    /// [`Response::is_stamped`]: crate::http::Response::is_stamped
     #[inline]
     pub async fn call_next(
         &mut self,
@@ -91,26 +122,26 @@ impl FlowCtrl {
         }
     }
 
-    /// Skip all reset handlers.
+    /// Skip all remaining handlers.
     #[inline]
     pub fn skip_rest(&mut self) {
         self.cursor = self.handlers.len()
     }
 
-    /// Check is `FlowCtrl` ceased.
+    /// Checks whether the handler chain has been ceased.
     ///
-    /// **NOTE**: If handler is used as middleware, it should use `is_ceased` to check is flow
-    /// ceased. If `is_ceased` returns `true`, the handler should skip the following logic.
+    /// **Note:** around-style middleware should check this after
+    /// [`FlowCtrl::call_next`] and skip post-processing when it returns `true`.
     #[inline]
     #[must_use]
     pub fn is_ceased(&self) -> bool {
         self.is_ceased
     }
-    /// Cease all following logic.
+    /// Ceases the remaining handler chain.
     ///
-    /// **NOTE**: This function will mark is_ceased as `true`, but whether the subsequent logic can
-    /// be skipped depends on whether the middleware correctly checks is_ceased and skips the
-    /// subsequent logic.
+    /// This marks the flow as ceased and skips all remaining handlers. Middleware
+    /// that has already called [`FlowCtrl::call_next`] should still check
+    /// [`FlowCtrl::is_ceased`] before running any post-processing.
     #[inline]
     pub fn cease(&mut self) {
         self.skip_rest();
