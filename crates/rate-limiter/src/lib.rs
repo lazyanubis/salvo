@@ -106,7 +106,8 @@ use std::hash::Hash;
 use salvo_core::handler::{Skipper, none_skipper};
 use salvo_core::http::{HeaderValue, Request, Response, StatusCode, StatusError};
 use salvo_core::{Depot, FlowCtrl, Handler, async_trait};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 mod quota;
 pub use quota::{BasicQuota, CelledQuota, QuotaGetter};

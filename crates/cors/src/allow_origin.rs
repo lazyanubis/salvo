@@ -246,15 +246,15 @@ fn wildcard_origin_matches(pattern: &HeaderValue, origin: &HeaderValue) -> bool 
         return false;
     };
 
-    if let Some(pattern_scheme) = pattern_parts.scheme {
-        if !pattern_scheme.eq_ignore_ascii_case(origin_parts.scheme) {
+    if let Some(pattern_scheme) = pattern_parts.scheme
+        && !pattern_scheme.eq_ignore_ascii_case(origin_parts.scheme)
+    {
         return false;
     }
-    }
-    if let Some(pattern_port) = pattern_parts.port {
-        if Some(pattern_port) != origin_parts.port {
+    if let Some(pattern_port) = pattern_parts.port
+        && Some(pattern_port) != origin_parts.port
+    {
         return false;
-    }
     }
 
     let suffix = &pattern_parts.host_pattern[1..];
