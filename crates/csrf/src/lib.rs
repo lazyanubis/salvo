@@ -36,10 +36,7 @@ use rand::RngExt;
 use rand::distr::StandardUniform;
 use salvo_core::handler::Skipper;
 use salvo_core::http::{Method, StatusCode};
-use salvo_core::{Depot, FlowCtrl, Handler, Request, Response, async_trait};
-
-#[macro_use]
-mod cfg;
+use salvo_core::{Depot, FlowCtrl, Handler, Request, Response, async_trait, cfg_feature};
 
 cfg_feature! {
     #![feature = "cookie-store"]
@@ -293,6 +290,16 @@ impl<C: CsrfCipher, S: CsrfStore> Csrf<C, S> {
         self
     }
 
+    /// Sets the [`Skipper`] used to bypass CSRF validation for matching requests.
+    ///
+    /// This replaces the default skipper, which skips safe request methods.
+    #[inline]
+    #[must_use]
+    pub fn skipper(mut self, skipper: impl Skipper) -> Self {
+        self.skipper = Box::new(skipper);
+        self
+    }
+
     /// Sets the token rotation policy. Defaults to [`CsrfRotationPolicy::PerSession`].
     #[inline]
     #[must_use]
@@ -352,9 +359,9 @@ impl<C: CsrfCipher, S: CsrfStore> Handler for Csrf<C, S> {
         match self.store.load(req, depot, &self.cipher).await {
             Some((current_token, proof)) => {
                 if !skipped {
-                    if let Some(token) = &self.find_token(req).await {
+                    if let Some(token) = self.find_token(req).await {
                         tracing::debug!("csrf token found in request");
-                        if !self.cipher.verify(token, &proof) {
+                        if !self.cipher.verify(&token, &proof) {
                             tracing::debug!(
                                 "rejecting request due to invalid or expired csrf token"
                             );
@@ -600,6 +607,22 @@ mod tests {
             .add_header("cookie", cookie.to_string(), true)
             .send(&service)
             .await;
+        assert_eq!(res.status_code.unwrap(), StatusCode::OK);
+        assert_eq!(res.take_string().await.unwrap(), "POST");
+    }
+
+    #[tokio::test]
+    async fn test_custom_skipper_bypasses_csrf_validation() {
+        let csrf = Csrf::new(
+            BcryptCipher::new(),
+            CookieStore::new(),
+            HeaderFinder::new("x-csrf-token"),
+        )
+        .skipper(|req: &mut Request, _depot: &Depot| *req.method() == Method::POST);
+        let router = Router::new().hoop(csrf).post(post_index);
+
+        let mut res = TestClient::post("http://127.0.0.1:5801").send(router).await;
+
         assert_eq!(res.status_code.unwrap(), StatusCode::OK);
         assert_eq!(res.take_string().await.unwrap(), "POST");
     }

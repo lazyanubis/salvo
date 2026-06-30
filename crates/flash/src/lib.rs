@@ -74,11 +74,8 @@
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
 
-use salvo_core::{Depot, FlowCtrl, Handler, Request, Response, async_trait};
+use salvo_core::{Depot, FlowCtrl, Handler, Request, Response, async_trait, cfg_feature};
 use serde::{Deserialize, Serialize};
-
-#[macro_use]
-mod cfg;
 
 cfg_feature! {
     #![feature = "cookie-store"]
@@ -266,8 +263,12 @@ pub trait FlashStore: Debug + Send + Sync + 'static {
         flash: Flash,
     ) -> impl Future<Output = ()> + Send;
     /// Clear the flash store.
-    fn clear_flash(&self, depot: &mut Depot, res: &mut Response)
-    -> impl Future<Output = ()> + Send;
+    fn clear_flash(
+        &self,
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+    ) -> impl Future<Output = ()> + Send;
 }
 
 /// A trait for `Depot` to get flash messages.
@@ -356,7 +357,9 @@ where
         }
 
         let mut flash = depot
-            .remove::<Flash>(OUTGOING_FLASH_KEY)
+            .remove(OUTGOING_FLASH_KEY)
+            .and_then(|v| v.downcast::<Flash>().ok())
+            .map(|v| *v)
             .unwrap_or_default();
         if let Some(min_level) = self.minimum_level {
             flash.0.retain(|msg| msg.level >= min_level);
@@ -364,7 +367,7 @@ where
         if !flash.is_empty() {
             self.store.save_flash(req, depot, res, flash).await;
         } else if has_incoming {
-            self.store.clear_flash(depot, res).await;
+            self.store.clear_flash(req, depot, res).await;
         }
     }
 }

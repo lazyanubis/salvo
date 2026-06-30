@@ -19,7 +19,11 @@ use crate::http::body::{H3ReqBody, ReqBody};
 use crate::proto::WebTransportSession;
 
 /// Builder used to serve HTTP/3 connections.
-pub struct Builder(salvo_http3::server::Builder);
+pub struct Builder {
+    inner: salvo_http3::server::Builder,
+    pub(crate) auto_alt_svc_header: bool,
+}
+
 impl Debug for Builder {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Builder").finish()
@@ -28,12 +32,12 @@ impl Debug for Builder {
 impl Deref for Builder {
     type Target = salvo_http3::server::Builder;
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.inner
     }
 }
 impl DerefMut for Builder {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.inner
     }
 }
 impl Default for Builder {
@@ -54,11 +58,31 @@ impl Builder {
             // h3 0.0.8 can leave aioquic/curl clients waiting for stream end
             // when a GREASE frame is sent just before finishing the response.
             .send_grease(false);
-        Self(builder)
+        Self {
+            inner: builder,
+            auto_alt_svc_header: true,
+        }
     }
 }
 
 impl Builder {
+    /// Configure whether to automatically include the `Alt-Svc` header in HTTP responses.
+    ///
+    /// If set to `true`, an `Alt-Svc` header will be included in the response.
+    /// Note that if an `Alt-Svc` header is already explicitly set in the handlers,
+    /// the handler's header will overwrite this automated one.
+    ///
+    /// The automatically generated header follows this format:
+    /// ```text
+    /// h3=":{port}"; ma=2592000,h3-29=":{port}"; ma=2592000
+    /// ```
+    ///
+    /// By default, this is set to `true`.
+    pub fn auto_alt_svc_header(&mut self, enabled: bool) -> &mut Self {
+        self.auto_alt_svc_header = enabled;
+        self
+    }
+
     /// Serve an HTTP/3 connection.
     pub async fn serve_connection(
         &self,
@@ -67,8 +91,9 @@ impl Builder {
         graceful_stop_token: Option<CancellationToken>,
     ) -> IoResult<()> {
         let fusewire = hyper_handler.fusewire.clone();
+        let raw_conn = conn.quinn().clone();
         let mut conn = self
-            .0
+            .inner
             .build::<salvo_http3::quinn::Connection, bytes::Bytes>(conn.into_inner())
             .await
             .map_err(|e| IoError::other(format!("invalid connection: {e}")))?;
@@ -96,6 +121,7 @@ impl Builder {
                                 stream,
                                 hyper_handler,
                                 fusewire.clone(),
+                                raw_conn.clone(),
                             )
                             .await?
                             {
@@ -145,11 +171,13 @@ async fn process_web_transport(
     stream: RequestStream<salvo_http3::quinn::BidiStream<Bytes>, Bytes>,
     hyper_handler: crate::service::HyperHandler,
     _fusewire: Option<ArcFusewire>,
+    raw_conn: crate::proto::quinn::Connection,
 ) -> IoResult<Option<salvo_http3::server::Connection<salvo_http3::quinn::Connection, Bytes>>> {
     let (parts, _body) = request.into_parts();
     let mut request = hyper::Request::from_parts(parts, ReqBody::None);
     request.extensions_mut().insert(Arc::new(Mutex::new(conn)));
     request.extensions_mut().insert(Arc::new(stream));
+    request.extensions_mut().insert(raw_conn);
 
     let mut response = hyper::service::Service::call(&hyper_handler, request)
         .await

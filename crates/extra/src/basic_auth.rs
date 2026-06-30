@@ -86,7 +86,7 @@ impl<V> BasicAuth<V>
 where
     V: BasicAuthValidator,
 {
-    /// Create new `BasicAuthValidator`.
+    /// Creates a new `BasicAuthValidator`.
     #[inline]
     pub fn new(validator: V) -> Self {
         Self {
@@ -124,7 +124,7 @@ where
         &self.header_names
     }
 
-    /// Get mutable reference to the header names.
+    /// Returns a mutable reference to the header names.
     #[inline]
     pub fn header_names_mut(&mut self) -> &mut Vec<HeaderName> {
         &mut self.header_names
@@ -152,8 +152,8 @@ pub fn ask_credentials(res: &mut Response, realm: impl AsRef<str>) {
     // that case so the request resolves with a 401 instead of panicking the
     // request task.
     let challenge = format!("Basic realm={:?}", realm.as_ref());
-    let value = HeaderValue::try_from(challenge)
-        .unwrap_or_else(|_| HeaderValue::from_static("Basic"));
+    let value =
+        HeaderValue::try_from(challenge).unwrap_or_else(|_| HeaderValue::from_static("Basic"));
     res.headers_mut().insert("WWW-Authenticate", value);
     res.status_code(StatusCode::UNAUTHORIZED);
 }
@@ -163,35 +163,46 @@ pub fn parse_credentials(
     req: &Request,
     header_names: &[HeaderName],
 ) -> Result<(String, String), Error> {
-    let mut authorization = "";
+    // Try every configured header for Basic credentials. A non-Basic (or empty)
+    // value on one header must not shadow valid Basic credentials on a later one,
+    // e.g. `Authorization: Bearer ..` alongside `Proxy-Authorization: Basic ..`.
     for header_name in header_names {
         if let Some(header_value) = req.headers().get(header_name) {
-            authorization = header_value.to_str().unwrap_or_default();
-            if !authorization.is_empty() {
-                break;
+            let authorization = header_value.to_str().unwrap_or_default();
+            if let Some(credentials) = parse_basic_authorization(authorization)? {
+                return Ok(credentials);
             }
         }
     }
-
-    if let Some((scheme, auth)) = authorization.split_once(' ')
-        && scheme.eq_ignore_ascii_case("Basic")
-    {
-        let auth = auth.trim_start();
-        if auth.is_empty() {
-            return Err(Error::other("`authorization` has bad format"));
-        }
-        let auth_bytes = general_purpose::STANDARD
-            .decode(auth)
-            .map_err(Error::other)?;
-        let auth = String::from_utf8(auth_bytes)
-            .map_err(|_| Error::other("credentials contain invalid UTF-8"))?;
-        if let Some((username, password)) = auth.split_once(':') {
-            return Ok((username.to_owned(), password.to_owned()));
-        } else {
-            return Err(Error::other("`authorization` has bad format"));
-        }
-    }
     Err(Error::other("parse http header failed"))
+}
+
+/// Parses a single `Authorization`-style header value as Basic credentials.
+///
+/// Returns `Ok(None)` when the value is not a Basic challenge (so the caller can
+/// try the next header), `Ok(Some(..))` on success, and `Err(..)` when the value
+/// is a Basic challenge but malformed.
+fn parse_basic_authorization(authorization: &str) -> Result<Option<(String, String)>, Error> {
+    let Some((scheme, auth)) = authorization.split_once(' ') else {
+        return Ok(None);
+    };
+    if !scheme.eq_ignore_ascii_case("Basic") {
+        return Ok(None);
+    }
+    let auth = auth.trim_start();
+    if auth.is_empty() {
+        return Err(Error::other("`authorization` has bad format"));
+    }
+    let auth_bytes = general_purpose::STANDARD
+        .decode(auth)
+        .map_err(Error::other)?;
+    let auth = String::from_utf8(auth_bytes)
+        .map_err(|_| Error::other("credentials contain invalid UTF-8"))?;
+    if let Some((username, password)) = auth.split_once(':') {
+        Ok(Some((username.to_owned(), password.to_owned())))
+    } else {
+        Err(Error::other("`authorization` has bad format"))
+    }
 }
 
 #[async_trait]
@@ -305,12 +316,27 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_credentials_falls_through_non_basic_header() {
+        // A non-Basic value on the first header must not shadow valid Basic
+        // credentials on a later one.
+        let mut req = Request::new();
+        req.headers_mut()
+            .insert(AUTHORIZATION, "Bearer sometoken".parse().unwrap());
+        req.headers_mut()
+            .insert(PROXY_AUTHORIZATION, "Basic cm9vdDpwd2Q=".parse().unwrap());
+
+        let result = parse_credentials(&req, &[AUTHORIZATION, PROXY_AUTHORIZATION]);
+        assert!(result.is_ok());
+        let (username, password) = result.unwrap();
+        assert_eq!(username, "root");
+        assert_eq!(password, "pwd");
+    }
+
+    #[test]
     fn test_parse_credentials_rejects_prefixed_scheme() {
         let mut req = Request::new();
-        req.headers_mut().insert(
-            AUTHORIZATION,
-            "BasicX cm9vdDpwd2Q=".parse().unwrap(),
-        );
+        req.headers_mut()
+            .insert(AUTHORIZATION, "BasicX cm9vdDpwd2Q=".parse().unwrap());
 
         assert!(parse_credentials(&req, &[AUTHORIZATION]).is_err());
     }

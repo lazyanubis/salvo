@@ -1,5 +1,7 @@
 //! Rust implementation of Openapi Spec V3.1.
 
+use salvo_core::cfg_feature;
+
 mod callback;
 mod components;
 mod content;
@@ -589,7 +591,7 @@ impl OpenApi {
                 let Endpoint {
                     mut operation,
                     mut components,
-                } = (creator)();
+                } = creator();
                 operation.tags.extend(node.metadata.tags.iter().cloned());
                 operation
                     .securities
@@ -1274,6 +1276,61 @@ mod tests {
 
         assert!(doc.paths.contains_key("/posts/{id}"));
         assert!(!doc.paths.contains_key("/posts/{id:num}"));
+    }
+
+    #[test]
+    fn to_parameters_struct_defaults_to_query_with_required() {
+        // Regression test for https://github.com/salvo-rs/salvo/issues/1609
+        // A struct used directly as a handler argument extracts from the query string by
+        // default, so its parameters must be reported with `in: query`. Non-`Option` fields
+        // must be `required: true`, and `Option` fields `required: false`. Previously the
+        // parameter location fell back to `ParameterIn::Path`, which mislabeled the location
+        // and forced every field to `required: true`.
+        #[derive(Deserialize, crate::ToParameters)]
+        #[allow(dead_code)]
+        struct ListQuery {
+            page: i32,
+            #[serde(rename = "pageSize")]
+            page_size: i32,
+            name: String,
+            keyword: Option<String>,
+        }
+
+        #[salvo_oapi::endpoint]
+        async fn list(query: ListQuery) -> &'static str {
+            let _ = query;
+            "ok"
+        }
+
+        let router = Router::with_path("/list").get(list);
+        let doc = OpenApi::new("test api", "0.0.1").merge_router(&router);
+
+        let path_item = doc.paths.get("/list").expect("/list entry should exist");
+        let operation = path_item
+            .operations
+            .get(&PathItemType::Get)
+            .expect("get operation should exist");
+
+        let by_name = |name: &str| {
+            operation
+                .parameters
+                .0
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("parameter `{name}` should exist"))
+        };
+
+        for name in ["page", "pageSize", "name", "keyword"] {
+            assert_eq!(
+                by_name(name).parameter_in,
+                ParameterIn::Query,
+                "parameter `{name}` should be located in query"
+            );
+        }
+        assert_eq!(by_name("page").required, Required::True);
+        assert_eq!(by_name("pageSize").required, Required::True);
+        assert_eq!(by_name("name").required, Required::True);
+        assert_eq!(by_name("keyword").required, Required::False);
     }
 
     #[test]

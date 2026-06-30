@@ -16,53 +16,38 @@ use crate::http::header::HeaderMap;
 use crate::serde::{CowValue, FlatValue, VecValue};
 use crate::{Depot, Request};
 
-/// Type alias for depot value extractor functions.
-/// Each extractor attempts to extract a specific type from the Depot and convert it to Cow<str>.
-type DepotExtractFn = for<'a> fn(&'a Depot, &str) -> Option<Cow<'a, str>>;
-
-/// Registry of depot value extractors.
-/// Extractors are tried in order until one succeeds.
-/// String types that can be borrowed are listed first for efficiency.
-static DEPOT_EXTRACTORS: &[DepotExtractFn] = &[
-    // Borrowable string types (most common, listed first)
-    |d, k| d.get::<String>(k).ok().map(|v| Cow::Borrowed(v.as_str())),
-    |d, k| d.get::<&'static str>(k).ok().map(|v| Cow::Borrowed(*v)),
-    |d, k| {
-        d.get::<Arc<String>>(k)
-            .ok()
-            .map(|v| Cow::Borrowed(v.as_str()))
-    },
-    |d, k| d.get::<Arc<str>>(k).ok().map(|v| Cow::Borrowed(&**v)),
-    // Signed integer types
-    |d, k| d.get::<i8>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<i16>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<i32>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<i64>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<i128>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<isize>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    // Unsigned integer types
-    |d, k| d.get::<u8>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<u16>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<u32>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<u64>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<u128>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<usize>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    // Floating point types
-    |d, k| d.get::<f32>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    |d, k| d.get::<f64>(k).ok().map(|v| Cow::Owned(v.to_string())),
-    // Boolean
-    |d, k| d.get::<bool>(k).ok().map(|v| Cow::Owned(v.to_string())),
-];
-
-/// Helper function to extract a value from Depot and convert it to a Cow<str>.
-/// Supports String, &str, Arc<String>, Arc<str>, and common primitive types (integers, floats,
-/// bool).
+/// Helper function to extract a value from Depot and convert it to a `Cow<str>`.
+/// Supports `String`, `&str`, `Arc<String>`, `Arc<str>`, and common primitive types (integers,
+/// floats, bool).
+///
+/// Does a single map lookup and then probes the candidate types with cheap
+/// `downcast_ref`s, rather than one map lookup per candidate type.
 fn get_depot_value<'a>(depot: &'a Depot, key: &str) -> Option<Cow<'a, str>> {
-    for extractor in DEPOT_EXTRACTORS {
-        if let Some(value) = extractor(depot, key) {
-            return Some(value);
-        }
+    let any = depot.get_any(key)?;
+    // Borrowable string types (most common, listed first).
+    if let Some(v) = any.downcast_ref::<String>() {
+        return Some(Cow::Borrowed(v.as_str()));
     }
+    if let Some(v) = any.downcast_ref::<&'static str>() {
+        return Some(Cow::Borrowed(*v));
+    }
+    if let Some(v) = any.downcast_ref::<Arc<String>>() {
+        return Some(Cow::Borrowed(v.as_str()));
+    }
+    if let Some(v) = any.downcast_ref::<Arc<str>>() {
+        return Some(Cow::Borrowed(&**v));
+    }
+    // Numeric and boolean types, rendered to an owned string.
+    macro_rules! try_display {
+        ($($t:ty),* $(,)?) => {$(
+            if let Some(v) = any.downcast_ref::<$t>() {
+                return Some(Cow::Owned(v.to_string()));
+            }
+        )*};
+    }
+    try_display!(
+        i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64, bool
+    );
     None
 }
 
@@ -95,7 +80,9 @@ where
 pub(crate) enum Payload<'a> {
     FormData(&'a FormData),
     JsonStr(&'a str),
-    JsonMap(HashMap<&'a str, &'a RawValue>),
+    // Behind an `Arc` so cloning a `Payload` (e.g. once per flattened field) is a
+    // refcount bump instead of rebuilding the whole map.
+    JsonMap(Arc<HashMap<&'a str, &'a RawValue>>),
 }
 impl Payload<'_> {
     #[allow(dead_code)]
@@ -149,7 +136,7 @@ impl<'de> RequestDeserializer<'de> {
                     {
                         // https://github.com/serde-rs/json/issues/903
                         payload = match serde_json::from_slice::<HashMap<&str, &RawValue>>(data) {
-                            Ok(map) => Some(Payload::JsonMap(map)),
+                            Ok(map) => Some(Payload::JsonMap(Arc::new(map))),
                             Err(e) => {
                                 tracing::warn!(error = ?e, "`RequestDeserializer` serde parse json payload failed");
                                 Some(Payload::JsonStr(std::str::from_utf8(data)?))
@@ -204,12 +191,16 @@ impl<'de> RequestDeserializer<'de> {
         T: de::DeserializeSeed<'de>,
     {
         if self.field_flatten {
-            let field = self
-                .metadata
-                .fields
-                .get(self.field_index as usize)
-                .expect("field must exist");
-            let metadata = field.metadata.expect("field's metadata must exist");
+            // `field_index` is an `isize` cursor whose `-1` sentinel means
+            // "before the first field"; guard the conversion so a broken
+            // invariant returns an error instead of indexing with `usize::MAX`.
+            let field = usize::try_from(self.field_index)
+                .ok()
+                .and_then(|index| self.metadata.fields.get(index))
+                .ok_or_else(|| ValError::custom("flatten field index out of range"))?;
+            let Some(metadata) = field.metadata else {
+                return Err(ValError::custom("flatten field has no metadata"));
+            };
             seed.deserialize(RequestDeserializer {
                 params: self.params,
                 queries: self.queries,
@@ -246,7 +237,9 @@ impl<'de> RequestDeserializer<'de> {
                 };
                 let mut de = serde_json::Deserializer::new(serde_json::de::StrRead::new(s));
                 seed.deserialize(&mut de)
-                    .map_err(|_| ValError::custom("parse value error"))
+                    // Preserve the underlying serde_json error (line/column and the
+                    // expected/actual type) instead of a generic message.
+                    .map_err(ValError::custom)
             } else if let Some(value) = self.field_str_value.take() {
                 seed.deserialize(CowValue(value))
             } else if let Some(value) = self.field_vec_value.take() {
@@ -385,7 +378,7 @@ impl<'de> RequestDeserializer<'de> {
                     let parser = self.real_parser(source);
                     match parser {
                         SourceParser::Json => {
-                            if let Some(payload) = &self.payload {
+                            return if let Some(payload) = &self.payload {
                                 match payload {
                                     Payload::FormData(form_data) => {
                                         let mut value = form_data.fields.get(field_name);
@@ -402,7 +395,7 @@ impl<'de> RequestDeserializer<'de> {
                                             self.field_source = Some(source);
                                             return true;
                                         }
-                                        return false;
+                                        false
                                     }
                                     Payload::JsonMap(map) => {
                                         let mut value = map.get(field_name);
@@ -419,17 +412,17 @@ impl<'de> RequestDeserializer<'de> {
                                             self.field_source = Some(source);
                                             return true;
                                         }
-                                        return false;
+                                        false
                                     }
                                     Payload::JsonStr(value) => {
                                         self.field_str_value = Some(Cow::Borrowed(*value));
                                         self.field_source = Some(source);
-                                        return true;
+                                        true
                                     }
                                 }
                             } else {
-                                return false;
-                            }
+                                false
+                            };
                         }
                         SourceParser::MultiMap => {
                             if let Some(Payload::FormData(form_data)) = self.payload {
@@ -453,7 +446,11 @@ impl<'de> RequestDeserializer<'de> {
                             return false;
                         }
                         _ => {
-                            panic!("unsupported source parser: {parser:?}");
+                            // `Source` and `Metadata` are public API, so a caller
+                            // can construct an unsupported (from, parser) pair.
+                            // Skip the field instead of panicking.
+                            tracing::error!(?parser, "unsupported source parser");
+                            return false;
                         }
                     }
                 }
@@ -472,7 +469,7 @@ impl<'de> RequestDeserializer<'de> {
             if self.fill_value(field) {
                 return field.serde_rename.map(Cow::from).or_else(|| {
                     if let Some(serde_rename_all) = self.metadata.serde_rename_all {
-                        Some(Cow::Owned(serde_rename_all.apply_to_field(field.decl_name)))
+                        Some(serde_rename_all.apply_to_field(field.decl_name))
                     } else {
                         Some(Cow::from(field.decl_name))
                     }
@@ -1142,6 +1139,51 @@ mod tests {
             RequestData {
                 user_id: "12345".to_owned(),
                 username: "alice".to_owned()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_de_request_with_salvo_flatten() {
+        // `#[salvo(extract(flatten))]` flattens an extractible sub-struct: its
+        // fields are pulled from the same (flat) request sources as the parent.
+        #[derive(Deserialize, Extractible, Eq, PartialEq, Debug)]
+        #[salvo(extract(default_source(from = "body", parse = "json")))]
+        struct Inner {
+            name: String,
+            age: usize,
+        }
+        #[derive(Deserialize, Extractible, Eq, PartialEq, Debug)]
+        #[salvo(extract(default_source(from = "body", parse = "json")))]
+        struct RequestData {
+            id: u64,
+            #[salvo(extract(flatten))]
+            inner: Inner,
+        }
+        #[derive(Serialize)]
+        struct Body {
+            id: u64,
+            name: &'static str,
+            age: usize,
+        }
+
+        let mut req = TestClient::get("http://127.0.0.1:8698/test")
+            .json(&Body {
+                id: 7,
+                name: "chris",
+                age: 20,
+            })
+            .build();
+        let mut depot = Depot::new();
+        let data: RequestData = req.extract(&mut depot).await.unwrap();
+        assert_eq!(
+            data,
+            RequestData {
+                id: 7,
+                inner: Inner {
+                    name: "chris".to_owned(),
+                    age: 20,
+                },
             }
         );
     }

@@ -52,22 +52,22 @@ impl ReqBody {
             }
         }
     }
-    /// Check is that body is not set.
+    /// Returns true if the body is not set.
     #[inline]
     pub fn is_none(&self) -> bool {
         matches!(*self, Self::None)
     }
-    /// Check is that body is once.
+    /// Returns true if the body contains one byte buffer.
     #[inline]
     pub fn is_once(&self) -> bool {
         matches!(*self, Self::Once(_))
     }
-    /// Check is that body is hyper default body type.
+    /// Returns true if the body is Hyper's default incoming body type.
     #[inline]
     pub fn is_hyper(&self) -> bool {
         matches!(*self, Self::Hyper { .. })
     }
-    /// Check is that body is stream.
+    /// Returns true if the body is boxed.
     #[inline]
     pub fn is_boxed(&self) -> bool {
         matches!(*self, Self::Boxed { .. })
@@ -114,7 +114,7 @@ impl Body for ReqBody {
                 if bytes.is_empty() {
                     Poll::Ready(None)
                 } else {
-                    let bytes = std::mem::replace(bytes, Bytes::new());
+                    let bytes = std::mem::take(bytes);
                     Poll::Ready(Some(Ok(Frame::data(bytes))))
                 }
             }
@@ -190,7 +190,7 @@ impl TryFrom<ReqBody> for Incoming {
                 "ReqBody::None cannot convert to Incoming",
             )),
             ReqBody::Once(_) => Err(crate::Error::other(
-                "ReqBody::Bytes cannot convert to Incoming",
+                "ReqBody::Once cannot convert to Incoming",
             )),
             ReqBody::Hyper { inner, .. } => Ok(inner),
             ReqBody::Boxed { .. } => Err(crate::Error::other(
@@ -266,7 +266,7 @@ cfg_feature! {
             S: RecvStream + Send + Unpin + 'static,
             B: Buf + Send + Unpin + 'static,
         {
-            /// Create new `H3ReqBody` instance.
+            /// Creates a new `H3ReqBody` instance.
             pub fn new(inner: salvo_http3::server::RequestStream<S, B>) -> Self {
                 Self { inner }
             }

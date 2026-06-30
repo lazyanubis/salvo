@@ -15,7 +15,14 @@ use crate::stores::UploadInfo;
 use crate::utils::is_safe_upload_id;
 
 /// Optional tus upload ID passed to size and URL callbacks.
-pub type UploadId = Option<String>;
+pub type MaybeUploadId = Option<String>;
+
+/// Deprecated alias for [`MaybeUploadId`].
+///
+/// The name was misleading — it is `Option<String>`, not an upload id — and was
+/// identical in meaning to [`MaybeUploadId`]. Use [`MaybeUploadId`] instead.
+#[deprecated(since = "0.94.0", note = "use `MaybeUploadId` instead")]
+pub type UploadId = MaybeUploadId;
 
 static RE_FILE_ID: OnceLock<Regex> = OnceLock::new();
 /// Returns the regex used to extract an upload ID from a request path.
@@ -27,10 +34,12 @@ pub fn file_id_regex() -> &'static Regex {
 #[derive(Clone)]
 pub enum MaxSize {
     /// Fixed maximum number of bytes accepted for an upload.
+    ///
+    /// A value of `0` means no configured size limit.
     Fixed(u64),
     /// Callback that computes the maximum number of bytes for each request.
     #[allow(clippy::type_complexity)]
-    Dynamic(Arc<dyn Fn(&Request, UploadId) -> BoxFuture<'static, u64> + Send + Sync>),
+    Dynamic(Arc<dyn Fn(&Request, MaybeUploadId) -> BoxFuture<'static, u64> + Send + Sync>),
 }
 
 impl fmt::Debug for MaxSize {
@@ -108,9 +117,30 @@ pub struct TusOptions {
     pub relative_location: bool,
 
     /// Canonical origin used for absolute `Location` headers.
+    ///
+    /// # Security
+    ///
+    /// When `relative_location` is `false` and `canonical_origin` is `None`, the
+    /// absolute `Location` is built from the request's `Host` (and, if
+    /// [`respect_forwarded_headers`](Self::respect_forwarded_headers) is set,
+    /// `Forwarded`, `X-Forwarded-Host`, `X-Forwarded-Proto`, and
+    /// `X-Forwarded-Ssl`) headers, all of which are client-controlled. An
+    /// attacker can then poison the returned upload URL via `Host` header
+    /// injection. In production prefer a relative `Location` or set
+    /// `canonical_origin` to a fixed, trusted origin so the host is never taken
+    /// from request headers.
     pub canonical_origin: Option<String>,
 
     /// Allows trusted forwarded headers to override the host and protocol used for `Location`.
+    ///
+    /// # Security
+    ///
+    /// Only enable this behind a proxy that overwrites every host/proto
+    /// forwarding header it honours — `Forwarded`, `X-Forwarded-Host`,
+    /// `X-Forwarded-Proto`, and `X-Forwarded-Ssl`. If clients can reach the
+    /// server directly, these headers are spoofable and can poison the
+    /// `Location` header; set [`canonical_origin`](Self::canonical_origin) to
+    /// avoid relying on request headers at all.
     pub respect_forwarded_headers: bool,
 
     /// Additional headers sent in `Access-Control-Allow-Headers`.
@@ -231,13 +261,21 @@ impl TusOptions {
     }
 
     /// Extracts and validates the upload ID from the request path.
+    ///
+    /// Prefers the decoded `{id}` route parameter so the id matches exactly what
+    /// the router parsed (avoiding any divergence between the route decoding and a
+    /// separate regex over the raw URI). Falls back to scanning the raw URI path
+    /// for callers that invoke this without the upload routes mounted.
     pub fn extract_file_id_from_request(&self, req: &Request) -> TusResult<String> {
-        let path = req.uri().path();
-        let re = file_id_regex();
-
-        re.captures(path)
-            .and_then(|caps| caps.get(1))
-            .map(|m| m.as_str().to_owned())
+        req.params()
+            .get("id")
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                file_id_regex()
+                    .captures(req.uri().path())
+                    .and_then(|caps| caps.get(1))
+                    .map(|m| m.as_str().to_owned())
+            })
             .filter(|id| is_safe_upload_id(id))
             .ok_or(TusError::FileIdError)
     }
@@ -270,7 +308,7 @@ impl TusOptions {
             Self::extract_host_and_proto(req.headers(), self.respect_forwarded_headers);
 
         if let Some(callback) = &self.generate_url_function {
-            match callback(
+            return match callback(
                 req,
                 GenerateUrlCtx {
                     proto,
@@ -279,8 +317,8 @@ impl TusOptions {
                     id: upload_id,
                 },
             ) {
-                Ok(url) => return Ok(url),
-                Err(e) => return Err(e),
+                Ok(url) => Ok(url),
+                Err(e) => Err(e),
             };
         }
 

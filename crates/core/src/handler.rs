@@ -50,7 +50,8 @@
 //! - No need to manually add `#[async_trait]`.
 //! - Unused context parameters can be omitted.
 //! - Required parameters can be listed in any supported order.
-//! - Return values that implement [`Writer`] or [`Scribe`] can be returned directly.
+//! - Return values that implement [`Writer`](crate::writing::Writer) or
+//!   [`Scribe`](crate::writing::Scribe) can be returned directly.
 //!
 //! `#[handler]` can also be added to an `impl` block. In that form, the `handle`
 //! method becomes the [`Handler::handle`] implementation for the struct:
@@ -76,7 +77,8 @@
 //! When the `anyhow` feature is enabled, `anyhow::Error` can be returned from a
 //! handler and is rendered as `500 Internal Server Error`.
 //!
-//! Custom error types can implement [`Writer`] to control the generated response:
+//! Custom error types can implement [`Writer`](crate::writing::Writer) to control the generated
+//! response:
 //!
 //! ```ignore
 //! use anyhow::anyhow;
@@ -312,7 +314,7 @@ where
     F: Fn(&mut Request, &Depot) -> bool + Send + Sync + 'static,
 {
     fn skipped(&self, req: &mut Request, depot: &Depot) -> bool {
-        (self)(req, depot)
+        self(req, depot)
     }
 }
 
@@ -342,7 +344,7 @@ impl Debug for HoopedHandler {
 }
 
 impl HoopedHandler {
-    /// Create new `HoopedHandler`.
+    /// Creates a new `HoopedHandler`.
     pub fn new<H: Handler>(inner: H) -> Self {
         Self {
             inner: Arc::new(inner),
@@ -393,14 +395,13 @@ impl Handler for HoopedHandler {
     ) {
         let inner: Arc<dyn Handler> = self.inner.clone();
         let right = ctrl.handlers.split_off(ctrl.cursor);
-        ctrl.handlers.append(
-            &mut self
-                .hoops
+        ctrl.handlers.extend(
+            self.hoops
                 .iter()
                 .cloned()
                 .chain([inner])
-                .chain(right)
-                .collect(),
+                .map(Some)
+                .chain(right),
         );
         ctrl.call_next(req, depot, res).await;
     }

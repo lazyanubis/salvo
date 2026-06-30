@@ -188,7 +188,7 @@ impl Feature {
                     "multiple_of",
                     "maximum",
                     "minimum",
-                    "exclusive_<aximum",
+                    "exclusive_maximum",
                     "exclusive_minimum",
                     "max_length",
                     "min_length",
@@ -269,7 +269,7 @@ impl TryToTokens for Feature {
                 quote! { .max_properties(#max_properties) }
             }
             Self::MinProperties(min_properties) => {
-                quote! { .max_properties(#min_properties) }
+                quote! { .min_properties(#min_properties) }
             }
             Self::SchemaWith(with_schema) => with_schema.to_token_stream(),
             Self::Description(description) => quote! { .description(#description) },

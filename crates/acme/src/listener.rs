@@ -14,7 +14,7 @@ use salvo_core::conn::{Accepted, Acceptor, HandshakeStream, Holding, Listener};
 use salvo_core::fuse::ArcFuseFactory;
 use salvo_core::http::Version;
 use salvo_core::http::uri::Scheme;
-use salvo_core::{Result as CoreResult, Router};
+use salvo_core::{Result as CoreResult, Router, cfg_feature};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::server::ServerConfig;
@@ -70,11 +70,21 @@ impl<T> AcmeListenerBuilder<T> {
     /// Defaults to Let's Encrypt production.
     #[inline]
     #[must_use]
-    pub fn get_directory(self, name: impl Into<String>, url: impl Into<String>) -> Self {
+    pub fn directory(self, name: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
             config_builder: self.config_builder.directory(name, url),
             ..self
         }
+    }
+
+    /// Deprecated alias for [`Self::directory`].
+    ///
+    /// The `get_` prefix was misleading: this is a setter, not a getter.
+    #[deprecated(since = "0.94.0", note = "use `directory` instead")]
+    #[inline]
+    #[must_use]
+    pub fn get_directory(self, name: impl Into<String>, url: impl Into<String>) -> Self {
+        self.directory(name, url)
     }
 
     /// Sets domains.
@@ -117,7 +127,7 @@ impl<T> AcmeListenerBuilder<T> {
         }
     }
 
-    /// Create an handler for HTTP-01 challenge.
+    /// Create a handler for HTTP-01 challenge.
     #[must_use]
     pub fn http01_challenge(self, router: &mut Router) -> Self {
         let config_builder = self.config_builder.http01_challenge();
@@ -130,7 +140,10 @@ impl<T> AcmeListenerBuilder<T> {
                 Router::with_path(format!("{WELL_KNOWN_PATH}/{{token}}")).goal(handler),
             );
         } else {
-            panic!("`HTTP-01` challenge's key should not be none");
+            // `AcmeConfigBuilder::http01_challenge()` always populates
+            // `keys_for_http01`, so this branch is an internal invariant violation
+            // rather than a user-triggerable error.
+            unreachable!("`http01_challenge()` must populate `keys_for_http01`");
         }
         Self {
             config_builder,
@@ -138,7 +151,7 @@ impl<T> AcmeListenerBuilder<T> {
         }
     }
 
-    /// Create an handler for TLS-ALPN-01 challenge.
+    /// Create a handler for TLS-ALPN-01 challenge.
     #[inline]
     #[must_use]
     pub fn tls_alpn01_challenge(self) -> Self {
@@ -173,6 +186,10 @@ impl<T> AcmeListenerBuilder<T> {
     }
 
     /// Sets the key type for certificate private keys.
+    ///
+    /// `EcdsaP256` is the default and recommended key type for newly generated
+    /// certificates. RSA variants are available for compatibility, but must be
+    /// selected explicitly.
     ///
     /// Available types: `EcdsaP256` (default), `EcdsaP384`, `EcdsaP521`,
     /// `Rsa2048`, `Rsa4096`, `Rsa8192`, `Ed25519`.
@@ -388,7 +405,10 @@ where
         let tls_acceptor = TlsAcceptor::from(server_config.clone());
         let inner = inner.try_bind().await?;
 
-        // Start certon's background maintenance for renewal + OCSP.
+        // Start certon's background maintenance for renewal + OCSP. Dropping the
+        // returned `JoinHandle` *detaches* the spawned task rather than cancelling
+        // it (per certon's docs), so the renewal/OCSP loop keeps running for the
+        // lifetime of the process even though we don't hold the handle.
         let _maintenance_handle = certon::start_maintenance(&certon_config);
 
         let acceptor = AcmeAcceptor::new(acme_config, server_config, inner, tls_acceptor);
@@ -439,7 +459,7 @@ cfg_feature! {
             let mut crypto = a.server_config.as_ref().clone();
             crypto.alpn_protocols = vec![b"h3-29".to_vec(), b"h3-28".to_vec(), b"h3-27".to_vec(), b"h3".to_vec()];
             let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(crypto).map_err(salvo_core::Error::other)?;
-            let config = salvo_core::conn::quinn::ServerConfig::with_crypto(Arc::new(crypto));
+            let config = quinn::ServerConfig::with_crypto(Arc::new(crypto));
             let b = QuinnListener::new(config, local_addr).try_bind().await?;
             Ok(JoinedAcceptor::new(a, b))
         }
@@ -451,7 +471,7 @@ pub struct AcmeAcceptor<T> {
     pub(crate) server_config: Arc<ServerConfig>,
     inner: T,
     holdings: Vec<Holding>,
-    tls_acceptor: tokio_rustls::TlsAcceptor,
+    tls_acceptor: TlsAcceptor,
 }
 impl<T> Debug for AcmeAcceptor<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

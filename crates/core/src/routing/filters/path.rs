@@ -166,7 +166,7 @@ impl From<CombWisp> for WispKind {
 #[derive(Debug)]
 pub struct RegexWispBuilder(Regex);
 impl RegexWispBuilder {
-    /// Create new `RegexWispBuilder`.
+    /// Creates a new `RegexWispBuilder`.
     #[inline]
     #[must_use]
     pub fn new(checker: Regex) -> Self {
@@ -186,7 +186,7 @@ impl WispBuilder for RegexWispBuilder {
 /// A [`WispBuilder`] that builds a [`CharsWisp`] from a per-character checker.
 pub struct CharsWispBuilder(Arc<dyn Fn(char) -> bool + Send + Sync + 'static>);
 impl CharsWispBuilder {
-    /// Create new `CharsWispBuilder`.
+    /// Creates a new `CharsWispBuilder`.
     #[inline]
     pub fn new<C>(checker: C) -> Self
     where
@@ -290,45 +290,33 @@ impl PathWisp for CharsWisp {
         let Some(picked) = state.pick() else {
             return false;
         };
-        if let Some(max_width) = self.max_width {
-            let mut chars = Vec::with_capacity(max_width);
-            for ch in picked.chars() {
-                if (self.checker)(ch) {
-                    chars.push(ch);
-                }
-                if chars.len() == max_width {
-                    state.forward(max_width);
-                    state.params.insert(&self.name, chars.into_iter().collect());
-                    #[cfg(feature = "matched-path")]
-                    push_named_part(&mut state.matched_parts, &self.name);
-                    return true;
-                }
+        // Match the longest *contiguous* run of checker-passing characters from
+        // the start, capped at `max_width` characters. Track the consumed byte
+        // length separately from the character count: `PathState::forward` is
+        // byte-based, so forwarding by a character count would misalign the
+        // cursor on multi-byte (non-ASCII) characters.
+        let mut count = 0usize;
+        let mut byte_len = 0usize;
+        let mut value = String::new();
+        for ch in picked.chars() {
+            if !(self.checker)(ch) {
+                break;
             }
-            if chars.len() >= self.min_width {
-                state.forward(chars.len());
-                state.params.insert(&self.name, chars.into_iter().collect());
-                #[cfg(feature = "matched-path")]
-                push_named_part(&mut state.matched_parts, &self.name);
-                true
-            } else {
-                false
+            value.push(ch);
+            byte_len += ch.len_utf8();
+            count += 1;
+            if self.max_width == Some(count) {
+                break;
             }
+        }
+        if count >= self.min_width {
+            state.forward(byte_len);
+            state.params.insert(&self.name, value);
+            #[cfg(feature = "matched-path")]
+            push_named_part(&mut state.matched_parts, &self.name);
+            true
         } else {
-            let mut chars = Vec::with_capacity(16);
-            for ch in picked.chars() {
-                if (self.checker)(ch) {
-                    chars.push(ch);
-                }
-            }
-            if chars.len() >= self.min_width {
-                state.forward(chars.len());
-                state.params.insert(&self.name, chars.into_iter().collect());
-                #[cfg(feature = "matched-path")]
-                push_named_part(&mut state.matched_parts, &self.name);
-                true
-            } else {
-                false
-            }
+            false
         }
     }
 }
@@ -342,7 +330,7 @@ pub struct CombWisp {
     wild_start: Option<String>,
 }
 impl CombWisp {
-    /// Create new `CombWisp`.
+    /// Creates a new `CombWisp`.
     ///
     /// # Panics
     /// If it contains an unsupported `WispKind`.
@@ -466,7 +454,11 @@ impl PathWisp for CombWisp {
                 if let Some(value) = caps.name(name) {
                     state.params.insert(name, value.as_str().to_owned());
                     if self.wild_regex.is_some() {
-                        wild_path = wild_path.trim_start_matches(value.as_str());
+                        // Strip the captured value exactly once. `trim_start_matches`
+                        // removes every leading repetition (e.g. a value of "a"
+                        // would strip all of "aaa…"), corrupting the remaining wild
+                        // path.
+                        wild_path = wild_path.strip_prefix(value.as_str()).unwrap_or(wild_path);
                     }
                     #[cfg(feature = "matched-path")]
                     {
@@ -699,7 +691,9 @@ impl PathParser {
     }
     #[inline]
     fn next(&mut self, skip_blanks: bool) -> Option<char> {
-        if self.offset < self.path.len() - 1 {
+        // `offset + 1 < len` rather than `offset < len - 1`: the latter underflows
+        // to `usize::MAX` when `path` is empty (e.g. the root path `/`).
+        if self.offset + 1 < self.path.len() {
             self.offset += 1;
             if skip_blanks {
                 self.skip_blanks();
@@ -712,7 +706,7 @@ impl PathParser {
     }
     #[inline]
     fn peek(&self, skip_blanks: bool) -> Option<char> {
-        if self.offset < self.path.len() - 1 {
+        if self.offset + 1 < self.path.len() {
             if skip_blanks {
                 let mut offset = self.offset + 1;
                 let mut ch = self.path[offset];
@@ -988,16 +982,10 @@ impl PathParser {
         Ok(wisps)
     }
     fn validate(&self, wisps: &[WispKind], all_names: &mut IndexSet<String>) -> Result<(), String> {
-        if !wisps.is_empty() {
-            let wild_name = all_names.iter().find(|v| v.starts_with('*'));
-            if let Some(wild_name) = wild_name {
-                return Err(format!(
-                    "wildcard name `{}` must added at the last in url: `{}`",
-                    wild_name,
-                    self.path.iter().collect::<String>()
-                ));
-            }
-        }
+        // Note: `validate` is only ever called once with an empty `all_names`,
+        // so a wildcard check here would always see an empty set. The real
+        // wildcard-position and duplicate-name validation happens below, after
+        // `all_names` is populated from `wisps`.
         for (index, wisp) in wisps.iter().enumerate() {
             let name = match wisp {
                 WispKind::Named(wisp) => Some(&wisp.0),
@@ -1106,7 +1094,7 @@ impl PathFilter {
         }
     }
 
-    /// Create new `PathFilter`.
+    /// Creates a new `PathFilter`.
     ///
     /// Invalid path patterns are logged and converted into a filter that never matches.
     /// Use [`PathFilter::try_new`] to handle malformed patterns explicitly.
@@ -1310,6 +1298,38 @@ mod tests {
     #[test]
     fn test_parse_num() {
         assert!(PathParser::new(r"/first{id:num}").parse().is_err());
+    }
+    #[test]
+    fn test_chars_wisp_contiguous_and_byte_forward() {
+        use std::sync::Arc;
+
+        use super::{CharsWisp, PathWisp, is_num};
+        // Stops at the first non-matching char (a contiguous run): "1a2"
+        // captures only "1" and leaves "a2".
+        let wisp = CharsWisp {
+            name: "id".to_owned(),
+            checker: Arc::new(is_num),
+            min_width: 1,
+            max_width: None,
+        };
+        let mut state = PathState::new("1a2");
+        assert!(wisp.detect(&mut state));
+        assert_eq!(state.params.get("id").map(String::as_str), Some("1"));
+        assert_eq!(state.pick(), Some("a2"));
+
+        // Multi-byte chars: the cursor advances by byte length, not char count,
+        // so the whole `é` segment is consumed and the next part is reachable.
+        // (With a char-count forward the cursor would land inside `é`.)
+        let wisp = CharsWisp {
+            name: "x".to_owned(),
+            checker: Arc::new(|c: char| c != '/'),
+            min_width: 1,
+            max_width: None,
+        };
+        let mut state = PathState::new("\u{00E9}/rest");
+        assert!(wisp.detect(&mut state));
+        assert_eq!(state.params.get("x").map(String::as_str), Some("\u{00E9}"));
+        assert_eq!(state.pick(), Some("rest"));
     }
     #[test]
     fn test_parse_named_follow_another_panic() {

@@ -24,8 +24,7 @@ use crate::options::TusOptions;
 use crate::{H_TUS_RESUMABLE, TUS_VERSION};
 
 pub(crate) const EXPOSE_HEADERS: &str = "Location, Upload-Offset, Upload-Length, Upload-Metadata, Upload-Expires, Tus-Resumable, Tus-Version, Tus-Extension, Tus-Max-Size";
-pub(crate) const DEFAULT_ALLOW_HEADERS: &str =
-    "Tus-Resumable, Upload-Length, Upload-Offset, Upload-Metadata, Content-Type, Content-Length";
+pub(crate) const DEFAULT_ALLOW_HEADERS: &str = "Tus-Resumable, Upload-Length, Upload-Defer-Length, Upload-Offset, Upload-Metadata, Upload-Concat, Content-Type, Content-Length";
 
 pub(crate) fn apply_common_headers<'a>(
     req: &Request,
@@ -52,8 +51,12 @@ pub(crate) fn apply_options_headers<'a>(
 
 fn apply_cors_headers(req: &Request, opts: &TusOptions, headers: &mut HeaderMap) {
     if let Some(origin) = cors_allow_origin(req, opts) {
+        // `*` must never be paired with credentials. The wildcard is only used
+        // when no explicit allowlist matched, in which case credentials are not
+        // honored regardless of `allowed_credentials`.
+        let is_wildcard = origin.as_bytes() == b"*";
         headers.insert("access-control-allow-origin", origin);
-        if opts.allowed_credentials {
+        if opts.allowed_credentials && !is_wildcard {
             headers.insert(
                 "access-control-allow-credentials",
                 HeaderValue::from_static("true"),
@@ -76,26 +79,27 @@ fn cors_allow_origin(req: &Request, opts: &TusOptions) -> Option<HeaderValue> {
         .headers()
         .get("origin")
         .and_then(|value| value.to_str().ok());
-    if opts.allowed_origins.is_empty() {
-        if opts.allowed_credentials {
-            return origin.and_then(|origin| HeaderValue::from_str(origin).ok());
-        }
+
+    // An explicitly listed origin always wins, so a trusted origin keeps getting
+    // its exact value reflected (and credentials, in `apply_cors_headers`) even
+    // when the allowlist also contains `*`.
+    if let Some(origin) = origin
+        && opts.allowed_origins.iter().any(|allowed| allowed == origin)
+    {
+        return HeaderValue::from_str(origin).ok();
+    }
+
+    // Otherwise, an empty or wildcard allowlist never reflects an arbitrary
+    // `Origin`. Reflecting the request origin together with
+    // `Access-Control-Allow-Credentials: true` would let any site read responses
+    // using the victim's cookies, so fall back to `*` (which the browser rejects
+    // in combination with credentials) instead of reflecting.
+    if opts.allowed_origins.is_empty() || opts.allowed_origins.iter().any(|allowed| allowed == "*")
+    {
         return Some(HeaderValue::from_static("*"));
     }
 
-    if opts.allowed_origins.iter().any(|allowed| allowed == "*") {
-        if opts.allowed_credentials {
-            return origin.and_then(|origin| HeaderValue::from_str(origin).ok());
-        }
-        return Some(HeaderValue::from_static("*"));
-    }
-
-    let origin = origin?;
-    if opts.allowed_origins.iter().any(|allowed| allowed == origin) {
-        HeaderValue::from_str(origin).ok()
-    } else {
-        None
-    }
+    None
 }
 
 pub(crate) fn insert_joined_header(
@@ -552,6 +556,56 @@ mod tests {
                 .to_str()
                 .unwrap()
                 .contains("X-Upload-Id")
+        );
+    }
+
+    #[test]
+    fn test_apply_common_headers_never_reflects_with_wildcard_credentials() {
+        // Empty allowlist + credentials must not reflect the request Origin.
+        let mut req = Request::new();
+        req.headers_mut().insert(
+            "origin",
+            HeaderValue::from_static("https://evil.example.com"),
+        );
+        let opts = TusOptions {
+            allowed_origins: vec![],
+            allowed_credentials: true,
+            ..TusOptions::default()
+        };
+        let mut headers = HeaderMap::new();
+
+        apply_common_headers(&req, &opts, &mut headers);
+
+        assert_eq!(headers.get("access-control-allow-origin").unwrap(), "*");
+        // `*` must never be paired with credentials.
+        assert!(headers.get("access-control-allow-credentials").is_none());
+    }
+
+    #[test]
+    fn test_apply_common_headers_listed_origin_wins_over_wildcard() {
+        // With both `*` and a trusted origin listed, a request from the trusted
+        // origin must still get its exact value reflected plus credentials.
+        let mut req = Request::new();
+        req.headers_mut().insert(
+            "origin",
+            HeaderValue::from_static("https://app.example.com"),
+        );
+        let opts = TusOptions {
+            allowed_origins: vec!["*".to_owned(), "https://app.example.com".to_owned()],
+            allowed_credentials: true,
+            ..TusOptions::default()
+        };
+        let mut headers = HeaderMap::new();
+
+        apply_common_headers(&req, &opts, &mut headers);
+
+        assert_eq!(
+            headers.get("access-control-allow-origin").unwrap(),
+            "https://app.example.com"
+        );
+        assert_eq!(
+            headers.get("access-control-allow-credentials").unwrap(),
+            "true"
         );
     }
 
