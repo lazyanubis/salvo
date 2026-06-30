@@ -730,6 +730,7 @@ fn get_upgrade_type(headers: &HeaderMap) -> Option<&str> {
 /// `eq_ignore_ascii_case`. Two missing tokens compare equal (the previous
 /// case-sensitive check matched too) so callers behave the same when neither
 /// side advertises an upgrade.
+#[allow(unused)]
 #[inline]
 pub(crate) fn upgrade_types_match(request: Option<&str>, response: Option<&str>) -> bool {
     match (request, response) {

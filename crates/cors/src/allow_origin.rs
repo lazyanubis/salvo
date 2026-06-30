@@ -112,9 +112,10 @@ impl AllowOrigin {
             HeaderValueListInner::Exact(v) => v.clone(),
             HeaderValueListInner::List(l) => {
                 let origin = origin?;
-                if l.iter()
-                    .any(|allowed| allowed == origin || wildcard_origin_matches(allowed, origin))
-                {
+                if l.iter().any(|allowed| {
+                    allowed == origin
+                        || crate::wildcard_origin::wildcard_origin_matches(allowed, origin)
+                }) {
                     origin.clone()
                 } else {
                     return None;
@@ -192,37 +193,6 @@ impl From<&Vec<String>> for AllowOrigin {
     }
 }
 
-fn wildcard_origin_matches(pattern: &HeaderValue, origin: &HeaderValue) -> bool {
-    let Ok(pattern) = pattern.to_str() else {
-        return false;
-    };
-    let Ok(origin) = origin.to_str() else {
-        return false;
-    };
-    let Some(pattern_parts) = OriginPatternParts::parse(pattern) else {
-        return false;
-    };
-    if !pattern_parts.host_pattern.starts_with("*.") {
-        return false;
-    }
-    let Some(origin_parts) = OriginParts::parse(origin) else {
-        return false;
-    };
-
-    if let Some(pattern_scheme) = pattern_parts.scheme
-        && !pattern_scheme.eq_ignore_ascii_case(origin_parts.scheme)
-    {
-        return false;
-    }
-    if let Some(pattern_port) = pattern_parts.port
-        && Some(pattern_port) != origin_parts.port
-    {
-        return false;
-    }
-
-    let suffix = &pattern_parts.host_pattern[1..];
-    origin_parts.host.ends_with(suffix) && origin_parts.host.len() > suffix.len()
-}
 #[cfg(test)]
 mod tests {
     use salvo_core::http::header::HeaderValue;

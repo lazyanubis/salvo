@@ -51,6 +51,8 @@ mod inner;
 mod max_age;
 mod vary;
 
+mod wildcard_origin;
+
 pub use self::allow_credentials::AllowCredentials;
 pub use self::allow_headers::AllowHeaders;
 pub use self::allow_methods::AllowMethods;

@@ -93,7 +93,6 @@ pub mod prelude {
     pub use async_trait::async_trait;
     pub use salvo_macros::{Extractible, handler};
 
-    pub use super::depot::type_key;
     pub use crate::depot::Depot;
     pub use crate::http::{Request, Response, StatusCode, StatusError};
     cfg_feature! {

@@ -21,13 +21,13 @@ pub(crate) struct State {
 pub(crate) async fn hello(depot: &mut Depot) -> String {
     // Obtain the Config instance from the depot
     #[allow(clippy::unwrap_used)]
-    let config = depot.obtain::<Config>().unwrap();
+    let config = depot.get_typed::<Config>().unwrap();
     // Get custom data from the depot
     #[allow(clippy::unwrap_used)]
     let custom_data = depot.get::<&str>("custom_data").unwrap();
     // Obtain the shared State instance from the depot
     #[allow(clippy::unwrap_used)]
-    let state = depot.obtain::<Arc<State>>().unwrap();
+    let state = depot.get_typed::<Arc<State>>().unwrap();
     // Lock the fails vector and add a new fail message
     #[allow(clippy::unwrap_used)]
     let mut fails_ref = state.fails.lock().unwrap();

@@ -10,6 +10,7 @@ use bytes::{Buf, Bytes};
 use http::{Request, Response, Version};
 use hyper::service::Service;
 #[cfg(not(feature = "hidden-on-ra"))]
+#[allow(unused)]
 use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};

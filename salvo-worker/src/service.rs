@@ -90,8 +90,8 @@ impl WorkerService {
             .unwrap_or_else(|| scheme.unwrap_or(http::uri::Scheme::HTTP));
         let request = salvo_core::Request::from_hyper(request, scheme);
         let mut depot = salvo_core::Depot::new();
-        depot.inject(env);
-        depot.inject(ctx);
+        depot.insert_typed(env);
+        depot.insert_typed(ctx);
         let response = self.service.handle(request, Some(depot)).await;
 
         // parse response

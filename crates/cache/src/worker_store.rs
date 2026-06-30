@@ -68,7 +68,7 @@ impl CacheStore for WorkerStore {
         Self::Key: Borrow<Q>,
         Q: Hash + Eq + Sync + AsRef<str>,
     {
-        let env = depot.obtain::<worker::Env>().ok()?;
+        let env = depot.get_typed::<worker::Env>().ok()?;
         let kv = env.kv(&self.key).ok()?;
 
         let name = key.as_ref();
@@ -89,7 +89,7 @@ impl CacheStore for WorkerStore {
         entry: CachedEntry,
     ) -> Result<(), Self::Error> {
         let env = depot
-            .obtain::<worker::Env>()
+            .get_typed::<worker::Env>()
             .map_err(|_| worker::Error::Json(("obtain Env failed".to_owned(), 1)))?;
         let kv = env.kv(&self.key)?;
 
