@@ -295,6 +295,7 @@ impl FilePart {
     }
 }
 
+#[cfg(not(target_family = "wasm"))] // ? unsupported on wasm
 fn cleanup_temporary_upload(path: &Path, temp_dir: &Path) {
     // Log warnings if cleanup fails to help identify potential disk space issues.
     if let Err(e) = std::fs::remove_file(path) {

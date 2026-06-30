@@ -20,6 +20,7 @@ examples/**/package-lock.json
 examples/**/pnpm-lock.yaml
 **/node_modules
 deps.txt
+.codex
 
 .DS_Store
 .claude

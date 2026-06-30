@@ -1,7 +1,38 @@
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 
-use futures::stream::TryStreamExt;
+use bytes::Bytes;
+use salvo_core::BoxedError;
+use salvo_core::http::body::{Body, Frame, ReqBody, SizeHint};
 use worker::*;
+
+#[derive(Debug)]
+struct WorkerReqBody(worker::Body);
+
+impl Body for WorkerReqBody {
+    type Data = Bytes;
+    type Error = BoxedError;
+
+    #[inline]
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        std::pin::Pin::new(&mut self.0)
+            .poll_frame(cx)
+            .map_err(|err| Box::new(err) as BoxedError)
+    }
+
+    #[inline]
+    fn is_end_stream(&self) -> bool {
+        self.0.is_end_stream()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> SizeHint {
+        self.0.size_hint()
+    }
+}
 
 /// service
 #[derive(Debug)]
@@ -68,9 +99,15 @@ impl WorkerService {
     pub async fn handle(&self, req: Request, env: Env, ctx: Context) -> worker::Result<Response> {
         // parse request
         let request: HttpRequest = req.try_into()?;
-        let (parts, mut body) = request.into_parts();
-        let body = body.try_next().await?.unwrap_or_default();
-        let request = ::http::Request::from_parts(parts, body);
+        let (parts, body) = request.into_parts();
+        let request = ::http::Request::from_parts(
+            parts,
+            ReqBody::Boxed {
+                inner: Box::pin(WorkerReqBody(body)),
+                #[cfg(not(target_family = "wasm"))]
+                fusewire: None,
+            },
+        );
         let scheme = request
             .headers()
             .iter()
