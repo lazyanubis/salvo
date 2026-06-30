@@ -13,7 +13,6 @@
         "chrono",
         "clippy",
         "codegen",
-        "ctype",
         "datagram",
         "Deque",
         "docsrs",
