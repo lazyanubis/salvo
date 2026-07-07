@@ -226,12 +226,16 @@ impl Catcher {
         req: &mut Request,
         depot: &mut Depot,
         res: &mut Response,
+        #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         conn: crate::ConnCtrl,
     ) {
+        #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         let mut ctrl = FlowCtrl::with_conn(
             self.hoops.iter().chain([&self.goal]).cloned().collect(),
             conn,
         );
+        #[cfg(target_family = "wasm")] // ? unsupported tokio functions
+        let mut ctrl = FlowCtrl::new(self.hoops.iter().chain([&self.goal]).cloned().collect());
         ctrl.call_next(req, depot, res).await;
     }
 }

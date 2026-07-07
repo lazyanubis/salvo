@@ -1,4 +1,5 @@
 use std::fmt::{self, Debug, Formatter};
+#[allow(unused)]
 use std::future::pending;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
@@ -9,6 +10,8 @@ use http::uri::Scheme;
 use hyper::service::Service as HyperService;
 use hyper::{Method, Request as HyperRequest, Response as HyperResponse};
 
+#[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
+use crate::ConnCtrl;
 use crate::catcher::{Catcher, write_error_default};
 use crate::conn::SocketAddr;
 #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
@@ -17,7 +20,7 @@ use crate::handler::{Handler, WhenHoop};
 use crate::http::body::{ReqBody, ResBody};
 use crate::http::{Mime, Request, Response, StatusCode};
 use crate::routing::{FlowCtrl, PathState, Router};
-use crate::{ConnCtrl, Depot, async_trait};
+use crate::{Depot, async_trait};
 
 /// Service http request.
 #[non_exhaustive]
@@ -156,6 +159,7 @@ impl Service {
         http_scheme: Scheme,
         #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         fuse_config: Option<FuseConfig>,
+        #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         conn_ctrl: ConnCtrl,
         alt_svc_h3: Option<HeaderValue>,
     ) -> HyperHandler {
@@ -171,6 +175,7 @@ impl Service {
             }),
             #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
             fuse_config,
+            #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
             conn_ctrl,
             alt_svc_h3,
         }
@@ -187,6 +192,7 @@ impl Service {
             request.scheme.clone(),
             #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
             None,
+            #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
             ConnCtrl::new(),
             None,
         )
@@ -243,6 +249,7 @@ pub struct HyperHandler {
     pub(crate) state: Arc<HyperHandlerState>,
     #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
     pub(crate) fuse_config: Option<FuseConfig>,
+    #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
     pub(crate) conn_ctrl: ConnCtrl,
     pub(crate) alt_svc_h3: Option<HeaderValue>,
 }
@@ -264,12 +271,14 @@ impl HyperHandler {
     #[rustfmt::skip]
     pub fn handle(&self, mut req: Request, depot: Option<Depot>) -> impl Future<Output = Response> + 'static {
         let state = self.state.clone();
+        #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         let conn_ctrl = self.conn_ctrl.clone();
         req.local_addr = self.local_addr.clone();
         req.remote_addr = self.remote_addr.clone();
         // Expose the connection control on the request so protocol-upgrade handlers
         // (e.g. WebSocket) can relax the transport fuse timers for the long-lived
         // connection they are about to take over.
+        #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         req.extensions_mut().insert(conn_ctrl.clone());
         #[cfg(not(feature = "cookie"))]
         let mut res = Response::new();
@@ -280,7 +289,7 @@ impl HyperHandler {
         {
             res.headers_mut().insert(ALT_SVC, alt_svc_h3.clone());
         }
-        let mut depot = Depot::new();
+        let mut depot = depot.unwrap_or_default();
 
         async move {
             let path = req.uri().path().to_owned();
@@ -299,7 +308,10 @@ impl HyperHandler {
                 handlers.extend(dm.hoops);
                 handlers.push(DEFAULT_STATUS_OK_HANDLER.clone());
                 handlers.push(dm.goal);
+                #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
                 let mut ctrl = FlowCtrl::with_conn(handlers, conn_ctrl.clone());
+                #[cfg(target_family = "wasm")] // ? unsupported tokio functions
+                let mut ctrl = FlowCtrl::new(handlers);
                 ctrl.call_next(&mut req, &mut depot, &mut res).await;
                 // Set it to default status code again if any hoop set status code to None.
                 if res.status_code.is_none() {
@@ -315,7 +327,10 @@ impl HyperHandler {
                 } else {
                     res.status_code = Some(StatusCode::NOT_FOUND);
                 }
+                #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
                 let mut ctrl = FlowCtrl::with_conn(state.hoops.clone(), conn_ctrl.clone());
+                #[cfg(target_family = "wasm")] // ? unsupported tokio functions
+                let mut ctrl = FlowCtrl::new(state.hoops.clone());
                 ctrl.call_next(&mut req, &mut depot, &mut res).await;
                 // Set it to default status code again if any hoop set status code to None.
                 if res.status_code.is_none() && path_state.once_ended {
@@ -373,7 +388,7 @@ impl HyperHandler {
             {
                 if let Some(catcher) = &state.catcher {
                     catcher
-                        .catch(&mut req, &mut depot, &mut res, conn_ctrl)
+                        .catch(&mut req, &mut depot, &mut res, #[cfg(not(target_family = "wasm"))] /* unsupported tokio functions */ conn_ctrl)
                         .await;
                 } else {
                     write_error_default(&req, &mut res, None);
@@ -456,13 +471,15 @@ where
         let mut request = Request::from_hyper(req, scheme);
         #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         request.body.set_fuse_config(self.fuse_config);
-        let response = self.handle(request);
+        let response = self.handle(request, None);
+        #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         let conn_ctrl = self.conn_ctrl.clone();
         Box::pin(async move {
             let response = response.await;
             // Do not return a response to Hyper after a handler abort. Yielding
             // Pending here lets the connection driver observe the abort signal
             // and drop the entire protocol connection first.
+            #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
             if conn_ctrl.is_aborted() {
                 pending::<()>().await;
             }

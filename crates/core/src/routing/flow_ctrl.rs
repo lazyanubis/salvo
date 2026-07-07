@@ -1,8 +1,10 @@
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
+#[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
+use crate::ConnCtrl;
 use crate::http::{Request, Response};
-use crate::{ConnCtrl, Depot, Handler};
+use crate::{Depot, Handler};
 
 /// Controls execution of a matched handler chain.
 ///
@@ -46,6 +48,7 @@ pub struct FlowCtrl {
     is_ceased: bool,
     pub(crate) cursor: usize,
     pub(crate) handlers: Vec<Option<Arc<dyn Handler>>>,
+    #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
     conn: ConnCtrl,
 }
 
@@ -69,11 +72,13 @@ impl FlowCtrl {
             is_ceased: false,
             cursor: 0,
             handlers: handlers.into_iter().map(Some).collect(),
+            #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
             conn: ConnCtrl::new(),
         }
     }
 
     /// Creates a handler flow bound to an existing connection control.
+    #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
     #[inline]
     #[must_use]
     pub(crate) fn with_conn(handlers: Vec<Arc<dyn Handler>>, conn: ConnCtrl) -> Self {
@@ -87,6 +92,7 @@ impl FlowCtrl {
     }
 
     /// Returns the control for the connection serving this handler flow.
+    #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
     #[inline]
     #[must_use]
     pub fn conn(&self) -> &ConnCtrl {
@@ -249,6 +255,7 @@ mod tests {
         assert!(!ctrl.has_next());
     }
 
+    #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
     #[tokio::test]
     async fn macro_handler_can_abort_connection() {
         #[handler]

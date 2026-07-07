@@ -104,8 +104,7 @@ impl WorkerService {
             parts,
             ReqBody::Boxed {
                 inner: Box::pin(WorkerReqBody(body)),
-                #[cfg(not(target_family = "wasm"))]
-                fusewire: None,
+                fuse_config: None,
             },
         );
         let scheme = request

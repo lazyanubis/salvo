@@ -20,6 +20,7 @@ pub struct BodyTimeout {
 }
 
 impl BodyTimeout {
+    #[allow(unused)]
     fn new(duration: std::time::Duration) -> Self {
         Self {
             duration,

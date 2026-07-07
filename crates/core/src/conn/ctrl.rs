@@ -129,16 +129,19 @@ impl ConnCtrl {
         }
     }
 
+    #[allow(unused)]
     #[cfg(any(feature = "http1", feature = "http2", feature = "quinn", test))]
     pub(crate) async fn notified(&self) -> ConnState {
         self.wait_for_state(false).await
     }
 
+    #[allow(unused)]
     #[cfg(any(feature = "http1", feature = "http2", feature = "quinn", test))]
     pub(crate) async fn aborted(&self) -> ConnState {
         self.wait_for_state(true).await
     }
 
+    #[allow(unused)]
     #[cfg(any(feature = "http1", feature = "http2", feature = "quinn", test))]
     async fn wait_for_state(&self, abort_only: bool) -> ConnState {
         loop {
