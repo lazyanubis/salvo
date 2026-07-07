@@ -71,11 +71,12 @@ impl HttpBuilder {
             // every accepted connection. Only the per-connection header-read timeout,
             // which varies with the fuse config, is applied later.
             #[cfg(feature = "http1")]
-            http1: {
-                let mut builder = http1::Builder::new();
-                builder.timer(crate::rt::tokio::TokioTimer::new());
-                builder
-            },
+            http1: http1::Builder::new(),
+            // http1: {
+            //     let mut builder = http1::Builder::new();
+            //     builder.timer(crate::rt::tokio::TokioTimer::new());
+            //     builder
+            // },
             #[cfg(feature = "http2")]
             http2: http2::Builder::new(hyper_util::rt::TokioExecutor::new()), /* hidden on rust-analyzer */
             #[cfg(feature = "quinn")]

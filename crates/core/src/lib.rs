@@ -28,8 +28,7 @@
 
 /// Re-export `async_trait`.
 pub use async_trait::async_trait;
-// #[cfg(not(target_family = "wasm"))] // ? unsupported hyper deps
-pub use hyper;
+// pub use hyper;
 pub use salvo_macros as macros;
 pub use salvo_macros::handler;
 // https://github.com/bkchr/proc-macro-crate/issues/10
