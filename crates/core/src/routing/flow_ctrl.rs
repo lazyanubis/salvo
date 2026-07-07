@@ -2,7 +2,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use crate::http::{Request, Response};
-use crate::{Depot, Handler};
+use crate::{ConnCtrl, Depot, Handler};
 
 /// Controls execution of a matched handler chain.
 ///
@@ -46,6 +46,7 @@ pub struct FlowCtrl {
     is_ceased: bool,
     pub(crate) cursor: usize,
     pub(crate) handlers: Vec<Option<Arc<dyn Handler>>>,
+    conn: ConnCtrl,
 }
 
 impl Debug for FlowCtrl {
@@ -68,7 +69,28 @@ impl FlowCtrl {
             is_ceased: false,
             cursor: 0,
             handlers: handlers.into_iter().map(Some).collect(),
+            conn: ConnCtrl::new(),
         }
+    }
+
+    /// Creates a handler flow bound to an existing connection control.
+    #[inline]
+    #[must_use]
+    pub(crate) fn with_conn(handlers: Vec<Arc<dyn Handler>>, conn: ConnCtrl) -> Self {
+        Self {
+            catching: None,
+            is_ceased: false,
+            cursor: 0,
+            handlers: handlers.into_iter().map(Some).collect(),
+            conn,
+        }
+    }
+
+    /// Returns the control for the connection serving this handler flow.
+    #[inline]
+    #[must_use]
+    pub fn conn(&self) -> &ConnCtrl {
+        &self.conn
     }
     /// Returns whether there is another handler in the chain.
     #[inline]
@@ -120,12 +142,22 @@ impl FlowCtrl {
     }
 
     /// Skip all remaining handlers.
+    ///
+    /// This only exhausts the remaining chain — it does **not** mark the flow as
+    /// ceased: an upstream around-style middleware that checks
+    /// [`is_ceased`](FlowCtrl::is_ceased) after [`call_next`](FlowCtrl::call_next)
+    /// will still run its post-processing. Call [`cease`](FlowCtrl::cease) instead
+    /// when that post-processing must be suppressed too.
     #[inline]
     pub fn skip_rest(&mut self) {
         self.cursor = self.handlers.len()
     }
 
     /// Checks whether the handler chain has been ceased.
+    ///
+    /// This flag is only set by an explicit [`cease`](FlowCtrl::cease) call —
+    /// neither [`skip_rest`](FlowCtrl::skip_rest) nor the automatic skip on
+    /// terminal ("stamped") responses sets it.
     ///
     /// **Note:** around-style middleware should check this after
     /// [`FlowCtrl::call_next`] and skip post-processing when it returns `true`.
@@ -215,5 +247,22 @@ mod tests {
         let mut ctrl = FlowCtrl::new(handlers);
         assert!(!ctrl.call_next(&mut req, &mut depot, &mut res).await);
         assert!(!ctrl.has_next());
+    }
+
+    #[tokio::test]
+    async fn macro_handler_can_abort_connection() {
+        #[handler]
+        async fn abort(conn: &mut ConnCtrl) {
+            conn.abort();
+        }
+
+        let conn = ConnCtrl::new();
+        let mut ctrl = FlowCtrl::with_conn(vec![Arc::new(abort)], conn.clone());
+        let mut req = Request::new();
+        let mut depot = Depot::new();
+        let mut res = Response::new();
+
+        assert!(ctrl.call_next(&mut req, &mut depot, &mut res).await);
+        assert!(conn.is_aborted());
     }
 }

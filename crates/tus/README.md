@@ -21,7 +21,7 @@
 <a href="https://docs.rs/salvo"><img alt="Documentation" src="https://docs.rs/salvo/badge.svg" /></a>
 <a href="https://crates.io/crates/salvo"><img alt="Download" src="https://img.shields.io/crates/d/salvo.svg" /></a>
 <a href="https://github.com/rust-secure-code/safety-dance/"><img alt="unsafe forbidden" src="https://img.shields.io/badge/unsafe-forbidden-success.svg" /></a>
-<a href="https://blog.rust-lang.org/2025/12/11/Rust-1.92.0/"><img alt="Rust Version" src="https://img.shields.io/badge/rust-1.92%2B-blue" /></a>
+<a href="https://blog.rust-lang.org/2026/03/05/Rust-1.94.0/"><img alt="Rust Version" src="https://img.shields.io/badge/rust-1.94%2B-blue" /></a>
 <br>
 <a href="https://salvo.rs">
     <img alt="Website" src="https://img.shields.io/badge/https-salvo.rs-%23f00" />
@@ -94,6 +94,22 @@ async fn main() {
     Server::new(acceptor).serve(router).await;
 }
 ```
+
+## Absolute Location URLs
+
+Tus returns relative `Location` headers by default. If clients need absolute
+upload URLs in production, set a fixed trusted origin with
+`absolute_location`:
+
+```rust
+let tus = Tus::new()
+    .path("/uploads")
+    .absolute_location("https://uploads.example.com");
+```
+
+Avoid using `relative_location(false)` by itself for internet-facing services:
+without a canonical origin, absolute URLs are derived from request `Host` or
+forwarded headers.
 
 ## Lifecycle Hooks
 

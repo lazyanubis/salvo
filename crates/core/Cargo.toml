@@ -175,11 +175,21 @@ tempfile = { workspace = true }
 socket2 = { workspace = true, optional = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 fastrand = { workspace = true }
 rustls = { workspace = true, features = ["aws-lc-rs"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "router_detect"
+harness = false
+
+[[bench]]
+name = "service_dispatch"
+harness = false
 
 [package.metadata.release]
 release = false
