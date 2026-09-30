@@ -101,7 +101,7 @@ pub struct Operation {
     ///
     /// [derive_path]: ../../attr.path.html
     /// [derive_openapi]: ../../derive.OpenApi.html
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 
     /// Short summary what [`Operation`] does.
@@ -137,7 +137,7 @@ pub struct Operation {
     pub external_docs: Option<ExternalDocs>,
 
     /// List of applicable parameters for this [`Operation`].
-    #[serde(skip_serializing_if = "Parameters::is_empty")]
+    #[serde(default, skip_serializing_if = "Parameters::is_empty")]
     pub parameters: Parameters,
 
     /// Optional request body for this [`Operation`].
@@ -159,17 +159,17 @@ pub struct Operation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<Deprecated>,
 
-    /// Declaration which security mechanisms can be used for for the operation. Only one
+    /// Declaration which security mechanisms can be used for the operation. Only one
     /// [`SecurityRequirement`] must be met.
     ///
     /// Security for the [`Operation`] can be set to optional by adding empty security with
     /// [`SecurityRequirement::default`].
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[serde(rename = "security")]
     pub securities: Vec<SecurityRequirement>,
 
     /// Alternative [`Server`]s for this [`Operation`].
-    #[serde(skip_serializing_if = "Servers::is_empty")]
+    #[serde(default, skip_serializing_if = "Servers::is_empty")]
     pub servers: Servers,
 
     /// Optional extensions "x-something"

@@ -48,14 +48,21 @@
 //! | `cors` | CORS middleware | ❌ |
 //! | `csrf` | CSRF protection middleware | ❌ |
 //! | `flash` | Flash messages middleware | ❌ |
-//! | `jwt-auth` | JWT authentication middleware | ❌ |
+//! | `jwt-auth` | JWT authentication middleware using the AWS-LC provider | ❌ |
+//! | `jwt-auth-ring` | JWT authentication middleware using the RustCrypto provider | ❌ |
 //! | `oapi` | OpenAPI 3 generation and Swagger/RapiDoc/ReDoc/Scalar UIs | ❌ |
 //! | `otel` | OpenTelemetry integration | ❌ |
 //! | `proxy` | Reverse-proxy middleware | ❌ |
 //! | `rate-limiter` | Rate-limiting middleware | ❌ |
+//! | `rfc9457` | RFC 9457 Problem Details responses | ❌ |
 //! | `serve-static` | Static file / directory serving | ❌ |
 //! | `session` | Cookie-based session middleware | ❌ |
 //! | `tus` | [tus.io](https://tus.io) resumable upload protocol | ❌ |
+//!
+//! `jwt-auth` and `jwt-auth-ring` enable the same middleware with different
+//! cryptography providers. Enable only one in normal builds. If Cargo feature
+//! unification enables both, call `jwt_auth::install_crypto_provider()` before
+//! any JWT operation.
 #![doc(html_favicon_url = "https://salvo.rs/favicon-32x32.png")]
 #![doc(html_logo_url = "https://salvo.rs/images/logo.svg")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -163,7 +170,7 @@ cfg_feature! {
     pub use salvo_flash as flash;
 }
 cfg_feature! {
-    #![feature = "jwt-auth"]
+    #![feature = "_jwt-auth"]
     #[doc(no_inline)]
     pub use salvo_jwt_auth as jwt_auth;
 }
@@ -247,7 +254,7 @@ pub mod prelude {
         pub use salvo_extra::force_https::ForceHttps;
     }
     cfg_feature! {
-        #![feature = "jwt-auth"]
+        #![feature = "_jwt-auth"]
         pub use salvo_jwt_auth::{JwtAuthDepotExt, JwtAuth, JwtAuthState};
     }
     cfg_feature! {

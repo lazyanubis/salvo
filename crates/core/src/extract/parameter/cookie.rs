@@ -1,17 +1,46 @@
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Deref, DerefMut};
 
-use salvo_core::Depot;
-use salvo_core::extract::{Extractible, Metadata};
-use salvo_core::http::{ParseError, Request};
-use salvo_core::serde::from_str_val;
 use serde::{Deserialize, Deserializer};
 
-use crate::endpoint::EndpointArgRegister;
-use crate::{Components, Operation, Parameter, ParameterIn, ToSchema};
+use crate::Depot;
+use crate::extract::{Extractible, Metadata};
+use crate::http::{ParseError, Request};
+use crate::serde::from_str_val;
 
-/// Represents the parameters passed by Cookie.
+/// Extracts a parameter from a request cookie.
+///
+/// Scalar values use Salvo's string deserializer. If that fails, the cookie
+/// value is parsed as JSON so structured values can be extracted directly.
 pub struct CookieParam<T, const REQUIRED: bool = true>(Option<T>);
+
+fn parse_cookie_value<'de, T>(value: &'de str) -> Option<T>
+where
+    T: Deserialize<'de>,
+{
+    // If the value looks like JSON, try JSON deserialization first so that
+    // structured types (e.g. serde_json::Value, untagged enums with a String
+    // variant) get the correct structured representation rather than being
+    // swallowed by the scalar string deserializer.
+    let trimmed = value.trim_start();
+    let looks_like_json = trimmed.starts_with('{')
+        || trimmed.starts_with('[')
+        || trimmed.starts_with('"')
+        || trimmed
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || matches!(c, '-' | 't' | 'f' | 'n'));
+
+    if looks_like_json {
+        if let Ok(v) = serde_json::from_str::<T>(value) {
+            return Some(v);
+        }
+    }
+
+    // Fall back to scalar string deserialization.
+    from_str_val(value).ok()
+}
+
 impl<T> CookieParam<T, true> {
     /// Consumes self and returns the value of the parameter.
     pub fn into_inner(self) -> T {
@@ -104,7 +133,7 @@ where
         let value = req
             .cookies()
             .get(arg)
-            .and_then(|v| from_str_val(v.value()).ok())
+            .and_then(|v| parse_cookie_value(v.value()))
             .ok_or_else(|| {
                 ParseError::other(format!(
                     "cookie parameter {arg} not found or convert to type failed"
@@ -135,33 +164,18 @@ where
         let value = req
             .cookies()
             .get(arg)
-            .and_then(|v| from_str_val(v.value()).ok());
+            .and_then(|v| parse_cookie_value(v.value()));
         Ok(Self(value))
-    }
-}
-
-impl<T, const R: bool> EndpointArgRegister for CookieParam<T, R>
-where
-    T: ToSchema,
-{
-    fn register(components: &mut Components, operation: &mut Operation, arg: &str) {
-        let parameter = Parameter::new(arg)
-            .location(ParameterIn::Cookie)
-            .description(format!("Get parameter `{arg}` from request cookie."))
-            .schema(T::to_schema(components))
-            .required(R);
-        operation.parameters.insert(parameter);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use assert_json_diff::assert_json_eq;
     use http::header::HeaderValue;
-    use salvo_core::test::TestClient;
-    use serde_json::json;
+    use serde::Serialize;
 
     use super::*;
+    use crate::test::TestClient;
 
     #[test]
     fn test_required_cookie_param_into_inner() {
@@ -245,6 +259,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_required_cookie_param_extract_with_json_value() {
+        #[derive(Debug, Deserialize, Serialize, PartialEq)]
+        struct AuthToken {
+            pkce_verifier: String,
+            csrf_token: String,
+        }
+
+        let expected = AuthToken {
+            pkce_verifier: "verifier".into(),
+            csrf_token: "csrf".into(),
+        };
+        let cookie = cookie::Cookie::new(
+            "token",
+            serde_json::to_string(&expected).expect("serialize cookie value"),
+        );
+        let mut req = TestClient::get("http://127.0.0.1:5801")
+            .add_header("cookie", cookie.encoded().to_string(), true)
+            .build();
+        let mut depot = Depot::new();
+
+        let result =
+            CookieParam::<AuthToken, true>::extract_with_arg(&mut req, &mut depot, "token")
+                .await
+                .unwrap();
+        assert_eq!(result.into_inner(), expected);
+    }
+
+    #[tokio::test]
+    async fn test_required_cookie_param_extract_json_value_as_value() {
+        let cookie = cookie::Cookie::new("data", r#"{"x":1}"#);
+        let mut req = TestClient::get("http://127.0.0.1:5801")
+            .add_header("cookie", cookie.encoded().to_string(), true)
+            .build();
+        let mut depot = Depot::new();
+
+        let result =
+            CookieParam::<serde_json::Value, true>::extract_with_arg(&mut req, &mut depot, "data")
+                .await
+                .unwrap();
+        assert_eq!(result.into_inner(), serde_json::json!({"x": 1}));
+    }
+
+    #[tokio::test]
+    async fn test_required_cookie_param_extract_untagged_enum_string_not_matched_by_json() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(untagged)]
+        enum StringOrStruct {
+            String(String),
+            Struct { x: i32 },
+        }
+
+        let cookie = cookie::Cookie::new("data", r#"{"x":1}"#);
+        let mut req = TestClient::get("http://127.0.0.1:5801")
+            .add_header("cookie", cookie.encoded().to_string(), true)
+            .build();
+        let mut depot = Depot::new();
+
+        let result =
+            CookieParam::<StringOrStruct, true>::extract_with_arg(&mut req, &mut depot, "data")
+                .await
+                .unwrap();
+        // Should be parsed as the struct variant, not the string variant.
+        assert_eq!(result.into_inner(), StringOrStruct::Struct { x: 1 });
+    }
+
+    #[tokio::test]
     #[should_panic]
     async fn test_required_cookie_param_extract_with_value_panic() {
         let req = TestClient::get("http://127.0.0.1:5801").build_hyper();
@@ -293,30 +373,5 @@ mod tests {
         let result =
             CookieParam::<String, false>::extract_with_arg(&mut req, &mut depot, "param").await;
         assert_eq!(result.unwrap().0.unwrap(), "param");
-    }
-
-    #[test]
-    fn test_cookie_param_register() {
-        let mut components = Components::new();
-        let mut operation = Operation::new();
-        CookieParam::<String, false>::register(&mut components, &mut operation, "arg");
-
-        assert_json_eq!(
-            operation,
-            json!({
-                "parameters": [
-                    {
-                        "name": "arg",
-                        "in": "cookie",
-                        "description": "Get parameter `arg` from request cookie.",
-                        "required": false,
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                ],
-                "responses": {}
-            })
-        )
     }
 }

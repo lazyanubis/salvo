@@ -18,6 +18,21 @@ use crate::http::Method;
 use crate::http::body::{H3ReqBody, ReqBody};
 use crate::proto::WebTransportSession;
 
+fn take_unique_arc_extension<T>(
+    extensions: &mut http::Extensions,
+    name: &'static str,
+) -> IoResult<Option<T>>
+where
+    T: Send + Sync + 'static,
+{
+    match extensions.remove::<Arc<T>>() {
+        Some(value) => Arc::into_inner(value)
+            .map(Some)
+            .ok_or_else(|| IoError::other(format!("{name} is still shared"))),
+        None => Ok(None),
+    }
+}
+
 /// Builder used to serve HTTP/3 connections.
 pub struct Builder {
     inner: salvo_http3::server::Builder,
@@ -253,40 +268,34 @@ async fn process_web_transport(
         .await
         .map_err(|e| IoError::other(format!("failed to call hyper service : {e}")))?;
 
-    let conn;
-    let stream;
-    if let Some(session) = response
-        .extensions_mut()
-        .remove::<WebTransportSession<salvo_http3::quinn::Connection, Bytes>>()
+    if let Some(session) = take_unique_arc_extension::<
+        WebTransportSession<salvo_http3::quinn::Connection, Bytes>,
+    >(response.extensions_mut(), "WebTransport session")?
     {
-        let (server_conn, connect_stream) = session.split();
-
-        conn = Some(
-            server_conn
-                .into_inner()
-                .map_err(|e| IoError::other(format!("failed to get conn : {e}")))?,
-        );
-        stream = Some(connect_stream);
-    } else {
-        conn = response
-            .extensions_mut()
-            .remove::<Arc<Mutex<salvo_http3::server::Connection<salvo_http3::quinn::Connection, Bytes>>>>()
-            .map(|c| {
-                Arc::into_inner(c).expect("HTTP/3 connection must exist").into_inner()
-                    .map_err(|e| IoError::other( format!("failed to get conn : {e}")))
-            })
-            .transpose()?;
-        stream =
-            response
-                .extensions_mut()
-                .remove::<Arc<
-                    salvo_http3::server::RequestStream<
-                        salvo_http3::quinn::BidiStream<Bytes>,
-                        Bytes,
-                    >,
-                >>()
-                .and_then(Arc::into_inner);
+        // `WebTransportSession::accept` already sent the successful CONNECT response. Restore the
+        // connection without passing its stream through the normal response writer, which would
+        // send a second response on the accepted CONNECT stream.
+        let (server_conn, _connect_stream) = session.split();
+        let conn = server_conn
+            .into_inner()
+            .map_err(|e| IoError::other(format!("failed to get conn : {e}")))?;
+        return Ok(Some(conn));
     }
+
+    let conn = take_unique_arc_extension::<
+        Mutex<salvo_http3::server::Connection<salvo_http3::quinn::Connection, Bytes>>,
+    >(response.extensions_mut(), "HTTP/3 connection")?
+        .map(|c| {
+            c.into_inner()
+                .map_err(|e| IoError::other(format!("failed to get conn : {e}")))
+        })
+        .transpose()?;
+    let stream = take_unique_arc_extension::<
+        salvo_http3::server::RequestStream<
+            salvo_http3::quinn::BidiStream<Bytes>,
+            Bytes,
+        >,
+    >(response.extensions_mut(), "WebTransport request stream")?;
 
     let Some(conn) = conn else {
         return Ok(None);
@@ -389,4 +398,37 @@ where
     tx.finish()
         .await
         .map_err(|e| IoError::other(format!("failed to finish stream : {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct NonClone(&'static str);
+
+    #[test]
+    fn take_unique_arc_extension_returns_owned_value() {
+        let mut extensions = http::Extensions::new();
+        extensions.insert(Arc::new(NonClone("session")));
+
+        let value = take_unique_arc_extension::<NonClone>(&mut extensions, "test value")
+            .expect("unique Arc should be unwrapped");
+
+        assert_eq!(value, Some(NonClone("session")));
+        assert!(extensions.get::<Arc<NonClone>>().is_none());
+    }
+
+    #[test]
+    fn take_unique_arc_extension_rejects_shared_value() {
+        let mut extensions = http::Extensions::new();
+        let value = Arc::new(NonClone("session"));
+        let _shared = value.clone();
+        extensions.insert(value);
+
+        let error = take_unique_arc_extension::<NonClone>(&mut extensions, "test value")
+            .expect_err("shared Arc should not be silently discarded");
+
+        assert_eq!(error.to_string(), "test value is still shared");
+    }
 }

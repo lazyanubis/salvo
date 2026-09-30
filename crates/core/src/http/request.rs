@@ -33,15 +33,18 @@ use crate::{Depot, Error, FlowCtrl, Handler, async_trait};
 
 static GLOBAL_SECURE_MAX_SIZE: AtomicUsize = AtomicUsize::new(64 * 1024);
 
-/// Get global secure maximum size, default value is 64KB.
+/// Returns the process-wide fallback limit for bounded request-body reads.
 ///
-/// **Note**: The security maximum value applies to request body reads and form parsing,
-/// including multipart file uploads. Increase the limit if you need to accept large uploads.
+/// The initial value is 64 KiB. A request-specific limit set by [`SecureMaxSize`]
+/// or [`Request::set_secure_max_size`] takes precedence over this value.
+///
+/// The limit applies to request body reads and form parsing, including multipart
+/// file uploads.
 pub fn global_secure_max_size() -> usize {
     GLOBAL_SECURE_MAX_SIZE.load(Ordering::Relaxed)
 }
 
-/// Set secure maximum size globally.
+/// Sets the process-wide fallback limit for bounded request-body reads.
 ///
 /// This sets the process-wide fallback limit for every request that does not
 /// have a route-specific or request-specific limit. Treat this value as a
@@ -52,24 +55,46 @@ pub fn global_secure_max_size() -> usize {
 /// [`Request::set_secure_max_size`] when only specific routes or handlers need
 /// to accept larger bodies.
 ///
-/// **Note**: The security maximum value applies to request body reads and form parsing,
-/// including multipart file uploads. Increase the limit if you need to accept large uploads.
+/// The value is expressed in bytes and applies to request body reads and form
+/// parsing, including multipart file uploads.
 pub fn set_global_secure_max_size(size: usize) {
     GLOBAL_SECURE_MAX_SIZE.store(size, Ordering::Relaxed);
 }
 
-/// Middleware to set the secure maximum size of the request body.
+/// Middleware that sets the maximum body size accepted by Salvo's parsing helpers.
 ///
-/// Use this when only part of an application needs a different body limit. It
-/// avoids changing the process-wide fallback set by
+/// The limit is expressed in bytes and is used by body-reading and parsing
+/// methods such as [`Request::payload`], [`Request::form_data`],
+/// [`Request::parse_json`], and [`Request::parse_body`]. This middleware only
+/// records the limit on the request; it does not consume the body or reject a
+/// request based on its `Content-Length` by itself.
+///
+/// Install it before any middleware or handler that reads the body. An already
+/// cached body is not checked again, and code that reads [`Request::body_mut`]
+/// directly bypasses this helper-level limit. Middleware that must also bound
+/// direct streaming reads can call [`Request::limit_body`].
+///
+/// Use this type when only part of an application needs a different limit,
+/// rather than changing the process-wide fallback with
 /// [`set_global_secure_max_size()`].
 ///
-/// **Note**: The security maximum value applies to request body reads and form parsing,
-/// including multipart file uploads. Increase the limit if you need to accept large uploads.
+/// # Example
+///
+/// ```
+/// use salvo_core::Router;
+/// use salvo_core::http::request::SecureMaxSize;
+///
+/// // Body-reading helpers in this subtree may accept up to 10 MiB.
+/// let uploads = Router::with_path("uploads").hoop(SecureMaxSize::new(10 * 1024 * 1024));
+/// # let _ = uploads;
+/// ```
 #[derive(Debug, Clone, Copy)]
-pub struct SecureMaxSize(pub usize);
+pub struct SecureMaxSize(
+    /// The maximum number of bytes that Salvo's bounded body helpers may read.
+    pub usize,
+);
 impl SecureMaxSize {
-    /// Create a new `SecureMaxSize` instance.
+    /// Creates middleware with the given byte limit.
     #[must_use]
     pub fn new(size: usize) -> Self {
         Self(size)
@@ -702,8 +727,10 @@ impl Request {
 
         /// Try to get a WebTransport session from the request.
         pub async fn web_transport_mut(&mut self) -> Result<&mut crate::proto::WebTransportSession<salvo_http3::quinn::Connection, Bytes>, crate::Error> {
+            type Session = crate::proto::WebTransportSession<salvo_http3::quinn::Connection, Bytes>;
+
             if self.is_wt_connect() {
-                if self.extensions.get::<crate::proto::WebTransportSession<salvo_http3::quinn::Connection, Bytes>>().is_none() {
+                if self.extensions.get::<Arc<Session>>().is_none() {
                     let conn = self.extensions.remove::<Arc<std::sync::Mutex<salvo_http3::server::Connection<salvo_http3::quinn::Connection, Bytes>>>>();
                     let stream = self.extensions.remove::<Arc<salvo_http3::server::RequestStream<salvo_http3::quinn::BidiStream<Bytes>, Bytes>>>();
                     match (conn, stream) {
@@ -713,7 +740,7 @@ impl Request {
                                     if let Some(stream) = Arc::into_inner(stream) {
                                         let session =  crate::proto::WebTransportSession::accept(stream, conn).await?;
                                         self.extensions.insert(Arc::new(session));
-                                        if let Some(session) = self.extensions.get_mut::<Arc<crate::proto::WebTransportSession<salvo_http3::quinn::Connection, Bytes>>>() {
+                                        if let Some(session) = self.extensions.get_mut::<Arc<Session>>() {
                                             if let Some(session) = Arc::get_mut(session) {
                                                 Ok(session)
                                             } else {
@@ -742,8 +769,8 @@ impl Request {
                         }
                         (None, None) => Err(crate::Error::Other("invalid web transport without connection and stream".into())),
                     }
-                } else if let Some(session) = self.extensions.get_mut::<crate::proto::WebTransportSession<salvo_http3::quinn::Connection, Bytes>>() {
-                    Ok(session)
+                } else if let Some(session) = self.extensions.get_mut::<Arc<Session>>() {
+                    Arc::get_mut(session).ok_or_else(|| crate::Error::Other("web transport session should not used twice".into()))
                 } else {
                     Err(crate::Error::Other("invalid web transport".into()))
                 }

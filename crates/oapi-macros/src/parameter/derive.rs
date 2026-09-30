@@ -68,7 +68,7 @@ impl TryToTokens for ToParameters {
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
         let ex_life = &Lifetime::new("'__macro_gen_ex", Span::call_site());
-        let ex_lifetime: GenericParam = LifetimeParam::new(ex_life.clone()).into();
+        let ex_lifetime = GenericParam::Lifetime(LifetimeParam::new(ex_life.clone()));
         let mut ex_generics = self.generics.clone();
         ex_generics.params.insert(0, ex_lifetime);
         let ex_impl_generics = ex_generics.split_for_impl().0;
@@ -110,7 +110,11 @@ impl TryToTokens for ToParameters {
                 default_parameter_in
             {
                 match default_parameter_in {
-                    ParameterIn::Query => quote! { #salvo::extract::metadata::SourceFrom::Query },
+                    // `querystring` describes the whole query string as one value; salvo
+                    // extracts from the same place, so it shares `SourceFrom::Query`.
+                    ParameterIn::Query | ParameterIn::QueryString => {
+                        quote! { #salvo::extract::metadata::SourceFrom::Query }
+                    }
                     ParameterIn::Header => quote! { #salvo::extract::metadata::SourceFrom::Header },
                     ParameterIn::Path => quote! { #salvo::extract::metadata::SourceFrom::Param },
                     ParameterIn::Cookie => quote! { #salvo::extract::metadata::SourceFrom::Cookie },
@@ -478,7 +482,12 @@ impl Parameter<'_> {
         });
         if let Some(parameter_in) = param_features.pop_parameter_in_feature() {
             let source = match parameter_in {
-                attributes::ParameterIn(crate::parameter::ParameterIn::Query) => {
+                // `querystring` describes the whole query string as one value; salvo extracts
+                // from the same place, so it shares `SourceFrom::Query`.
+                attributes::ParameterIn(
+                    crate::parameter::ParameterIn::Query
+                    | crate::parameter::ParameterIn::QueryString,
+                ) => {
                     quote! { #salvo::extract::metadata::Source::new(#salvo::extract::metadata::SourceFrom::Query, #salvo::extract::metadata::SourceParser::Smart) }
                 }
                 attributes::ParameterIn(crate::parameter::ParameterIn::Header) => {

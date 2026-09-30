@@ -65,6 +65,10 @@ cfg_feature! {
 }
 
 pub use errors::{ParseError, ParseResult, StatusError, StatusResult};
+cfg_feature! {
+    #![feature = "rfc9457"]
+    pub use errors::{NoExtensions, PROBLEM_JSON, PlainProblem, Problem};
+}
 pub use headers;
 pub use http::method::Method;
 pub use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header, method, uri};
@@ -76,6 +80,25 @@ pub use body::{Body, ReqBody, ResBody};
 pub use http::version::Version;
 pub use mime::Mime;
 pub use response::Response;
+
+#[doc(hidden)]
+pub fn append_vary_header(headers: &mut HeaderMap, vary_by: &'static str) {
+    if headers.contains_key(header::VARY) {
+        let already_varies = headers
+            .get_all(header::VARY)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|value| {
+                let value = value.trim();
+                value == "*" || value.eq_ignore_ascii_case(vary_by)
+            });
+        if already_varies {
+            return;
+        }
+    }
+    headers.append(header::VARY, HeaderValue::from_static(vary_by));
+}
 
 #[doc(hidden)]
 #[must_use]

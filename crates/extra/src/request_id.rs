@@ -114,7 +114,7 @@ impl RequestId {
         //             generated_id = %id,
         //             "request id generator returned an invalid header value; falling back to ULID"
         //         );
-        //         HeaderValue::from_str(&Ulid::new().to_string())
+        //         HeaderValue::from_str(&Ulid::generate().to_string())
         //             .expect("ULID should always be a valid header value")
         //     }
         // }
@@ -156,7 +156,7 @@ impl UlidGenerator {
 impl IdGenerator for UlidGenerator {
     #[cfg(not(target_family = "wasm"))] // ? not os env
     fn generate(&self, _req: &mut Request, _depot: &mut Depot) -> String {
-        Ulid::new().to_string()
+        Ulid::generate().to_string()
     }
 
     #[cfg(target_family = "wasm")] // ? not os env
@@ -320,8 +320,7 @@ mod tests {
             .get("x-request-id")
             .unwrap()
             .to_str()
-            .unwrap()
-            .to_owned();
+            .unwrap().to_owned();
         let body = response.take_string().await.unwrap();
         assert_eq!(header_id, body);
     }

@@ -29,13 +29,8 @@ full = [
     "reqwest-client",
     # "unix-sock-client"
 ]
-aws-lc-rs = ["hyper-rustls?/aws-lc-rs", "reqwest?/rustls"]
-ring = [
-    "hyper-rustls?/ring",
-    "reqwest?/rustls-no-provider",
-    "rustls",
-    "rustls/ring",
-]
+aws-lc-rs = ["hyper-rustls?/aws-lc-rs", "reqwest?/rustls", "rustls", "rustls/aws-lc-rs"]
+ring = ["hyper-rustls?/ring", "reqwest?/rustls-no-provider", "rustls", "rustls/ring"]
 hyper-client = ["dep:hyper-util", "dep:hyper-rustls"]
 reqwest-client = ["dep:reqwest"]
 unix-sock-client = []
@@ -69,7 +64,7 @@ hyper-util = { workspace = true, optional = true, features = [
     "client-legacy",
 ] }
 percent-encoding = { workspace = true }
-reqwest = { workspace = true, default-features = false, optional = true, features = [
+reqwest = { workspace = true, optional = true, features = [
     "charset",
     # "http2",
     "stream",
@@ -93,7 +88,9 @@ reqwest = { workspace = true, optional = true, features = [
 [dev-dependencies]
 futures-util = { workspace = true, features = ["sink"] }
 salvo_core = { workspace = true, features = ["http1", "server", "test"] }
-rustls = { workspace = true, features = ["aws-lc-rs"] }
+# Both backends on purpose: this makes rustls unable to pick a provider from crate features,
+# which is exactly the situation that used to panic when building the default HTTPS connector.
+rustls = { workspace = true, features = ["aws-lc-rs", "ring"] }
 salvo_extra = { workspace = true, features = ["websocket"] }
 tokio-tungstenite = { workspace = true }
 

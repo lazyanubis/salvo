@@ -44,8 +44,12 @@ mod tests {
     use std::path::Path;
 
     use salvo_core::http::HeaderValue;
-    use salvo_core::http::header::{CONTENT_ENCODING, VARY};
+    use salvo_core::http::header::{
+        ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
+        HeaderName, VARY, X_CONTENT_TYPE_OPTIONS,
+    };
     use salvo_core::prelude::*;
+    use salvo_core::routing::{Filter, filters};
     use salvo_core::test::{ResponseExt, TestClient};
 
     use crate::*;
@@ -157,6 +161,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_static_dir_rejects_dot_directory_ancestors() {
+        let root = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join(".git/objects")).unwrap();
+        fs::write(root.path().join(".git/config"), "token = secret").unwrap();
+        fs::write(root.path().join(".git/objects/data"), "object data").unwrap();
+        fs::write(root.path().join(".env"), "top-level secret").unwrap();
+        fs::write(root.path().join("public.txt"), "public data").unwrap();
+
+        let service = Service::new(
+            Router::with_path("{*path}")
+                .get(StaticDir::new(root.path().to_path_buf()).auto_list(true)),
+        );
+
+        for path in [
+            "/.env",
+            "/.git/config",
+            "/.git/objects/data",
+            "/.git/objects/",
+        ] {
+            let response = TestClient::get(format!("http://127.0.0.1:5801{path}"))
+                .send(&service)
+                .await;
+            assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND), "{path}");
+        }
+
+        let mut response = TestClient::get("http://127.0.0.1:5801/public.txt")
+            .send(&service)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "public data");
+
+        let mut response = TestClient::get("http://127.0.0.1:5801/")
+            .add_header("accept", "application/json", true)
+            .send(&service)
+            .await;
+        let listing = response.take_string().await.unwrap();
+        assert!(listing.contains("public.txt"));
+        assert!(!listing.contains(".git"));
+        assert!(!listing.contains(".env"));
+
+        let included_service = Service::new(
+            Router::with_path("{*path}").get(
+                StaticDir::new(root.path().to_path_buf())
+                    .auto_list(true)
+                    .include_dot_files(true),
+            ),
+        );
+        let mut response = TestClient::get("http://127.0.0.1:5801/.git/config")
+            .send(&included_service)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "token = secret");
+    }
+
+    #[tokio::test]
     async fn test_static_dir_rejects_symlinked_directory_escape() {
         let public = tempfile::TempDir::new().unwrap();
         let private = tempfile::TempDir::new().unwrap();
@@ -183,15 +242,215 @@ mod tests {
         assert_eq!(response.status_code.unwrap(), StatusCode::NOT_FOUND);
     }
 
+    /// `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>`, gzipped.
+    const SVGZ: &[u8] = &[
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xb3, 0x29, 0x2e, 0x4b, 0x57,
+        0xa8, 0xc8, 0xcd, 0xc9, 0x2b, 0xb6, 0x55, 0xca, 0x28, 0x29, 0x29, 0xb0, 0xd2, 0xd7, 0x2f,
+        0x2f, 0x2f, 0xd7, 0x2b, 0x37, 0xd6, 0xcb, 0x2f, 0x4a, 0xd7, 0x37, 0x32, 0x30, 0x30, 0xd0,
+        0x07, 0xaa, 0x50, 0x52, 0x28, 0xcf, 0x4c, 0x29, 0xc9, 0xb0, 0x55, 0x32, 0x34, 0x50, 0x52,
+        0xc8, 0x48, 0xcd, 0x4c, 0xcf, 0x28, 0x01, 0xb3, 0xf5, 0xed, 0x00, 0xb8, 0xf1, 0x6a, 0x2e,
+        0x40, 0x00, 0x00, 0x00,
+    ];
+
+    #[tokio::test]
+    async fn test_serve_static_dir_marks_svgz_as_gzip_encoded() {
+        // A `.svgz` is a gzipped SVG. `mime_infer` reports its *type* as
+        // `image/svg+xml`, which is correct, but the bytes on disk are gzip. Without
+        // `Content-Encoding: gzip` the client is told a gzip stream is an SVG
+        // document and cannot render it.
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(root.path().join("logo.svgz"), SVGZ).unwrap();
+
+        let router = Router::with_path("{*path}")
+            .get(StaticDir::new(root.path().to_path_buf()).auto_list(false));
+        let service = Service::new(router);
+
+        let mut response = TestClient::get("http://127.0.0.1:5801/logo.svgz")
+            .add_header("accept-encoding", "gzip", true)
+            .send(&service)
+            .await;
+        assert_eq!(response.status_code.unwrap(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "image/svg+xml"
+        );
+        assert_eq!(response.headers().get(CONTENT_ENCODING).unwrap(), "gzip");
+        // The payload is passed through untouched; the client inflates it.
+        assert_eq!(response.take_bytes(None).await.unwrap().as_ref(), SVGZ);
+    }
+
+    #[tokio::test]
+    async fn test_serve_static_dir_ignores_sidecar_for_self_coded_file() {
+        // `logo.svgz` is already a gzip stream, so a `logo.svgz.br` sidecar stacks
+        // a second coding on it. Only one coding could be reported, leaving the
+        // client to strip brotli and hold gzip bytes labelled `image/svg+xml`.
+        // The sidecar must be ignored and the file served as the gzip it is.
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(root.path().join("logo.svgz"), SVGZ).unwrap();
+        fs::write(root.path().join("logo.svgz.br"), b"brotli-of-gzip").unwrap();
+
+        let router = Router::with_path("{*path}")
+            .get(StaticDir::new(root.path().to_path_buf()).auto_list(false));
+        let service = Service::new(router);
+
+        let mut response = TestClient::get("http://127.0.0.1:5801/logo.svgz")
+            .add_header("accept-encoding", "br, gzip", true)
+            .send(&service)
+            .await;
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "image/svg+xml"
+        );
+        assert_eq!(response.headers().get(CONTENT_ENCODING).unwrap(), "gzip");
+        assert_eq!(response.take_bytes(None).await.unwrap().as_ref(), SVGZ);
+    }
+
+    #[tokio::test]
+    async fn test_static_dir_does_not_serve_uploaded_svg_inline() {
+        // A directory of user uploads is the common deployment. An SVG or XML
+        // document rendered inline runs its own script in the serving origin, so
+        // neither may come back with `Content-Disposition: inline`.
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("poc.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" onload="alert(document.domain)"/>"#,
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("poc.xml"),
+            r#"<?xml-stylesheet type="text/xsl" href="poc.xsl"?><root/>"#,
+        )
+        .unwrap();
+        fs::write(root.path().join("logo.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+
+        let router = Router::with_path("{*path}")
+            .get(StaticDir::new(root.path().to_path_buf()).auto_list(false));
+        let service = Service::new(router);
+
+        async fn headers_of(service: &Service, url: &str) -> (String, String) {
+            let response = TestClient::get(url).send(service).await;
+            let header = |name: HeaderName| {
+                response
+                    .headers
+                    .get(name)
+                    .expect("header is set")
+                    .to_str()
+                    .expect("header is ascii")
+                    .to_owned()
+            };
+            (header(CONTENT_DISPOSITION), header(CONTENT_TYPE))
+        }
+
+        // The content type is asserted alongside the disposition: without it this
+        // test would also pass on a file that failed to be recognised at all and
+        // fell back to `application/octet-stream`.
+        for (name, expected_type) in [
+            ("poc.svg", "image/svg+xml"),
+            ("poc.xml", "text/xml; charset=utf-8"),
+        ] {
+            let (disposition, content_type) =
+                headers_of(&service, &format!("http://127.0.0.1:5801/{name}")).await;
+            assert_eq!(content_type, expected_type, "{name} content type");
+            assert!(
+                disposition.starts_with("attachment"),
+                "{name} served with `{disposition}`"
+            );
+        }
+        // Ordinary images keep rendering inline.
+        let (disposition, content_type) =
+            headers_of(&service, "http://127.0.0.1:5801/logo.png").await;
+        assert_eq!(content_type, "image/png");
+        assert_eq!(disposition, "inline");
+
+        // Responses are also marked non-sniffable.
+        let response = TestClient::get("http://127.0.0.1:5801/logo.png")
+            .send(&service)
+            .await;
+        assert_eq!(
+            response
+                .headers
+                .get(X_CONTENT_TYPE_OPTIONS)
+                .and_then(|v| v.to_str().ok()),
+            Some("nosniff")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_static_dir_names_download_after_the_requested_file() {
+        // Build tools routinely emit `logo.svg.br` next to `logo.svg`. When that
+        // sidecar is negotiated the bytes come from it, but the client asked for
+        // `logo.svg` and must be offered that name, not the sidecar's.
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(root.path().join("logo.svg"), "<svg/>").unwrap();
+        fs::write(root.path().join("logo.svg.br"), "brotli-bytes").unwrap();
+
+        let router = Router::with_path("{*path}")
+            .get(StaticDir::new(root.path().to_path_buf()).auto_list(false));
+        let service = Service::new(router);
+
+        let response = TestClient::get("http://127.0.0.1:5801/logo.svg")
+            .add_header("accept-encoding", "br", true)
+            .send(&service)
+            .await;
+        // The sidecar really was selected...
+        assert_eq!(
+            response
+                .headers
+                .get(CONTENT_ENCODING)
+                .and_then(|v| v.to_str().ok()),
+            Some("br")
+        );
+        // ...yet the download is named after the request.
+        assert_eq!(
+            response
+                .headers
+                .get(CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok()),
+            Some(r#"attachment; filename="logo.svg""#)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_static_dir_disposition_type_can_restore_inline() {
+        // Directories holding only trusted assets can opt back into inline SVG.
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("logo.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg"/>"#,
+        )
+        .unwrap();
+
+        let router = Router::with_path("{*path}").get(
+            StaticDir::new(root.path().to_path_buf())
+                .disposition_type("inline")
+                .use_content_type_options(false),
+        );
+        let service = Service::new(router);
+
+        let response = TestClient::get("http://127.0.0.1:5801/logo.svg")
+            .send(&service)
+            .await;
+        assert_eq!(
+            response
+                .headers
+                .get(CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok()),
+            Some("inline")
+        );
+        assert_eq!(response.headers.get(X_CONTENT_TYPE_OPTIONS), None);
+    }
+
     #[tokio::test]
     async fn test_serve_static_file() {
         let router = Router::new()
             .push(
-                Router::with_path("test1.txt").get(
-                    StaticFile::new("test/static/test1.txt")
-                        .chunk_size(1024)
-                        .preload_threshold(0),
-                ),
+                Router::with_path("test1.txt")
+                    .filter(filters::get().or(filters::head()))
+                    .goal(
+                        StaticFile::new("test/static/test1.txt")
+                            .chunk_size(1024)
+                            .preload_threshold(0),
+                    ),
             )
             .push(
                 Router::with_path("notexist.txt").get(StaticFile::new("test/static/notexist.txt")),
@@ -204,10 +463,59 @@ mod tests {
         assert_eq!(response.status_code.unwrap(), StatusCode::OK);
         assert_eq!(response.take_string().await.unwrap(), "copy1");
 
+        let response = TestClient::head("http://127.0.0.1:5801/test1.txt")
+            .send(&service)
+            .await;
+        assert_eq!(response.status_code.unwrap(), StatusCode::OK);
+        assert_eq!(response.headers().get(CONTENT_LENGTH).unwrap(), "5");
+        assert_eq!(response.headers().get(ACCEPT_RANGES).unwrap(), "bytes");
+        assert!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("text/plain")
+        );
+
         let response = TestClient::get("http://127.0.0.1:5801/notexist.txt")
             .send(&service)
             .await;
         assert_eq!(response.status_code.unwrap(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_serve_static_dir_head_matches_get_headers_without_body() {
+        let router = Router::with_path("{*path}")
+            .filter(filters::get().or(filters::head()))
+            .goal(StaticDir::new(vec!["test/static"]));
+        let service = Service::new(router);
+
+        let get_response = TestClient::get("http://127.0.0.1:5801/test1.txt")
+            .send(&service)
+            .await;
+        let mut response = TestClient::head("http://127.0.0.1:5801/test1.txt")
+            .send(&service)
+            .await;
+
+        assert_eq!(response.status_code.unwrap(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("text/plain")
+        );
+        assert_eq!(
+            response.headers().get(CONTENT_LENGTH),
+            get_response.headers().get(CONTENT_LENGTH)
+        );
+        assert_eq!(response.headers().get(CONTENT_LENGTH).unwrap(), "5");
+        assert_eq!(response.headers().get(ACCEPT_RANGES).unwrap(), "bytes");
+        assert_eq!(response.take_string().await.unwrap(), "");
     }
 
     #[tokio::test]

@@ -12,6 +12,15 @@
 //! - OpenID Connect support (behind the `oidc` feature flag)
 //! - Seamless integration with Salvo's middleware system
 //!
+//! # Crypto Providers
+//!
+//! Enable exactly one provider feature in normal builds: `aws-lc-rs` (the
+//! default) or `ring` for RustCrypto. If dependency feature unification enables
+//! both providers, call [`install_crypto_provider`] at the start of `main`,
+//! before any JWT operation. This includes validation performed internally by
+//! [`JwtAuth`], [`ConstDecoder`], or `OidcDecoder`, as well
+//! as direct `jsonwebtoken` encode or decode calls.
+//!
 //! # Security Considerations
 //!
 //! **Warning: avoid passing JWT tokens in URL query parameters in production.**
@@ -35,7 +44,7 @@
 //! ```no_run
 //! use jsonwebtoken::{self, EncodingKey};
 //! use salvo::http::{Method, StatusError};
-//! use salvo::jwt_auth::{ConstDecoder, HeaderFinder};
+//! use salvo::jwt_auth::{ConstDecoder, HeaderFinder, install_crypto_provider};
 //! use salvo::prelude::*;
 //! use serde::{Deserialize, Serialize};
 //! use time::{Duration, OffsetDateTime};
@@ -50,6 +59,9 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
+//!     install_crypto_provider()
+//!         .expect("install the JWT crypto provider before first use");
+//!
 //!     let auth_handler: JwtAuth<JwtClaims, _> = JwtAuth::new(ConstDecoder::from_secret(SECRET_KEY.as_bytes()))
 //!         .finders(vec![Box::new(HeaderFinder::new())])
 //!         .force_passed(true);
@@ -133,6 +145,11 @@
 #![doc(html_logo_url = "https://salvo.rs/images/logo.svg")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+#[cfg(not(any(feature = "aws-lc-rs", feature = "ring")))]
+compile_error!(
+    "salvo-jwt-auth requires a crypto provider; enable either the `aws-lc-rs` (default) or `ring` feature"
+);
+
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 
@@ -146,6 +163,36 @@ use salvo_core::http::{Method, Request, Response, StatusError};
 use salvo_core::{Depot, FlowCtrl, Handler, async_trait};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
+
+/// Installs the crypto provider selected by this crate for the current process.
+///
+/// Call this at the start of `main`, before any JWT operation, when dependency
+/// feature unification enables both JWT provider backends. This includes token
+/// validation performed internally by [`JwtAuth`], [`ConstDecoder`], or
+/// `OidcDecoder`, not only direct `jsonwebtoken` calls.
+/// AWS-LC takes precedence when both this crate's provider features are enabled.
+///
+/// Applications that install a custom [`jsonwebtoken::crypto::CryptoProvider`]
+/// should do that instead and must not call this function afterwards.
+///
+/// # Errors
+///
+/// Returns the provider this function attempted to install if a process-wide
+/// provider was already installed or initialized. Since `jsonwebtoken` only
+/// permits one installation, an error means this function was not called early
+/// enough or another provider was intentionally installed first.
+pub fn install_crypto_provider() -> Result<(), &'static jsonwebtoken::crypto::CryptoProvider> {
+    #[cfg(feature = "aws-lc-rs")]
+    {
+        jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default()
+    }
+    #[cfg(all(not(feature = "aws-lc-rs"), feature = "ring"))]
+    {
+        jsonwebtoken::crypto::rust_crypto::DEFAULT_PROVIDER.install_default()
+    }
+    #[cfg(not(any(feature = "aws-lc-rs", feature = "ring")))]
+    unreachable!("a crypto provider feature is required")
+}
 
 mod finder;
 pub use finder::{CookieFinder, FormFinder, HeaderFinder, JwtTokenFinder, QueryFinder};
@@ -169,7 +216,7 @@ pub const JWT_AUTH_TOKEN_KEY: &str = "::salvo::jwt_auth::auth_token";
 /// key used to insert auth error to depot.
 pub const JWT_AUTH_ERROR_KEY: &str = "::salvo::jwt_auth::auth_error";
 
-const ALL_METHODS: [Method; 9] = [
+const ALL_METHODS: [Method; 10] = [
     Method::GET,
     Method::POST,
     Method::PUT,
@@ -179,6 +226,7 @@ const ALL_METHODS: [Method; 9] = [
     Method::CONNECT,
     Method::PATCH,
     Method::TRACE,
+    Method::QUERY,
 ];
 
 /// JwtAuthError
@@ -473,17 +521,17 @@ mod tests {
         exp: i64,
     }
 
+    fn encode_test_token<T: Serialize>(claims: &T, key: &EncodingKey) -> String {
+        let _ = install_crypto_provider();
+        jsonwebtoken::encode(&jsonwebtoken::Header::default(), claims, key).unwrap()
+    }
+
     fn create_test_token(secret: &[u8], exp_days: i64) -> String {
         let claim = JwtClaims {
             user: "test_user".into(),
             exp: (OffsetDateTime::now_utc() + Duration::days(exp_days)).unix_timestamp(),
         };
-        jsonwebtoken::encode(
-            &jsonwebtoken::Header::default(),
-            &claim,
-            &EncodingKey::from_secret(secret),
-        )
-        .unwrap()
+        encode_test_token(&claim, &EncodingKey::from_secret(secret))
     }
 
     // ==================== ConstDecoder Tests ====================
@@ -561,8 +609,19 @@ mod tests {
     #[test]
     fn test_header_finder_new() {
         let finder = HeaderFinder::new();
-        assert_eq!(finder.allowed_methods.len(), 9); // All methods
+        assert_eq!(finder.allowed_methods.len(), ALL_METHODS.len());
+        assert!(finder.allowed_methods.contains(&Method::QUERY));
         assert_eq!(finder.header_names.len(), 1); // Authorization
+    }
+
+    #[tokio::test]
+    async fn test_header_finder_allows_query_by_default() {
+        let finder = HeaderFinder::new();
+        let mut req = TestClient::query("http://local.host/search")
+            .add_header("Authorization", "Bearer token", true)
+            .build();
+
+        assert_eq!(finder.find_token(&mut req).await.as_deref(), Some("token"));
     }
 
     #[test]
@@ -596,7 +655,7 @@ mod tests {
     fn test_query_finder_new() {
         let finder = QueryFinder::new("token");
         assert_eq!(finder.query_name, "token");
-        assert_eq!(finder.allowed_methods.len(), 9);
+        assert_eq!(finder.allowed_methods.len(), ALL_METHODS.len());
     }
 
     #[test]
@@ -624,7 +683,7 @@ mod tests {
     fn test_cookie_finder_new() {
         let finder = CookieFinder::new("session");
         assert_eq!(finder.cookie_name, "session");
-        assert_eq!(finder.allowed_methods.len(), 9);
+        assert_eq!(finder.allowed_methods.len(), ALL_METHODS.len());
     }
 
     #[test]
@@ -646,7 +705,7 @@ mod tests {
     fn test_form_finder_new() {
         let finder = FormFinder::new("token");
         assert_eq!(finder.field_name, "token");
-        assert_eq!(finder.allowed_methods.len(), 9);
+        assert_eq!(finder.allowed_methods.len(), ALL_METHODS.len());
     }
 
     #[test]
@@ -807,12 +866,7 @@ mod tests {
             exp: (OffsetDateTime::now_utc() + Duration::days(1)).unix_timestamp(),
         };
 
-        let token = jsonwebtoken::encode(
-            &jsonwebtoken::Header::default(),
-            &claim,
-            &EncodingKey::from_secret(b"ABCDEF"),
-        )
-        .unwrap();
+        let token = encode_test_token(&claim, &EncodingKey::from_secret(b"ABCDEF"));
         let content = access(&service, &token).await;
         assert!(content.contains("hello"));
 
@@ -832,12 +886,7 @@ mod tests {
             .unwrap();
         assert!(content.contains("hello"));
 
-        let token = jsonwebtoken::encode(
-            &jsonwebtoken::Header::default(),
-            &claim,
-            &EncodingKey::from_secret(b"ABCDEFG"),
-        )
-        .unwrap();
+        let token = encode_test_token(&claim, &EncodingKey::from_secret(b"ABCDEFG"));
         let content = access(&service, &token).await;
         assert!(content.contains("Forbidden"));
     }
@@ -937,12 +986,7 @@ mod tests {
             user: "admin".into(),
             exp: (OffsetDateTime::now_utc() + Duration::days(1)).unix_timestamp(),
         };
-        let token = jsonwebtoken::encode(
-            &jsonwebtoken::Header::default(),
-            &claim,
-            &EncodingKey::from_secret(b"SECRET"),
-        )
-        .unwrap();
+        let token = encode_test_token(&claim, &EncodingKey::from_secret(b"SECRET"));
 
         let content = TestClient::get("http://127.0.0.1:5801/hello")
             .add_header("Authorization", format!("Bearer {token}"), true)
@@ -975,12 +1019,7 @@ mod tests {
             user: "proxy_user".into(),
             exp: (OffsetDateTime::now_utc() + Duration::days(1)).unix_timestamp(),
         };
-        let token = jsonwebtoken::encode(
-            &jsonwebtoken::Header::default(),
-            &claim,
-            &EncodingKey::from_secret(b"SECRET"),
-        )
-        .unwrap();
+        let token = encode_test_token(&claim, &EncodingKey::from_secret(b"SECRET"));
 
         let content = TestClient::get("http://127.0.0.1:5801/hello")
             .add_header("Proxy-Authorization", format!("Bearer {token}"), true)
@@ -1057,12 +1096,7 @@ mod tests {
             user: "test".into(),
             exp: (OffsetDateTime::now_utc() + Duration::days(1)).unix_timestamp(),
         };
-        let token = jsonwebtoken::encode(
-            &jsonwebtoken::Header::default(),
-            &claim,
-            &EncodingKey::from_secret(b"SECRET"),
-        )
-        .unwrap();
+        let token = encode_test_token(&claim, &EncodingKey::from_secret(b"SECRET"));
 
         // GET should not find token because the method is not allowed.
         let content = TestClient::get("http://127.0.0.1:5801/hello")
