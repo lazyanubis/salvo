@@ -24,6 +24,7 @@ mod logging;
 mod open_api;
 mod proxy;
 mod rate_limiter;
+mod request_body;
 mod request_id;
 mod session;
 mod timeout;
@@ -102,6 +103,7 @@ fn init_router() -> Router {
     );
 
     let router = Router::new()
+        .push(Router::with_path("request_body").post(request_body::echo))
         .push(Router::with_path("/api-doc/openapi.json").get(open_api_handler))
         .get(rate_limiter::hello)
         // affix_state

@@ -100,6 +100,9 @@ impl WorkerService {
         // parse request
         let request: HttpRequest = req.try_into()?;
         let (parts, body) = request.into_parts();
+        // A Worker body frame is only a chunk, not the complete payload. Keep the
+        // stream intact so Salvo can collect the original bytes with its size limit
+        // or let streaming handlers consume them with backpressure.
         let request = ::http::Request::from_parts(
             parts,
             ReqBody::Boxed {
