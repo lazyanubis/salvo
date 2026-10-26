@@ -5,6 +5,8 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "response-observers")]
+use std::sync::{Mutex, Weak};
 
 use bytes::Bytes;
 #[cfg(feature = "cookie")]
@@ -23,7 +25,7 @@ use crate::extract::{Extractible, Metadata};
 #[cfg(not(target_family = "wasm"))] // ? fuse
 use crate::fuse::TransProto;
 use crate::http::body::ReqBody;
-use crate::http::form::{FilePart, FormData};
+use crate::http::form::{FilePart, FormData, FormLimits};
 use crate::http::{Mime, ParseError, ParseResult, Response, Version};
 use crate::routing::PathParams;
 use crate::serde::{
@@ -32,6 +34,50 @@ use crate::serde::{
 use crate::{Depot, Error, FlowCtrl, Handler, async_trait};
 
 static GLOBAL_SECURE_MAX_SIZE: AtomicUsize = AtomicUsize::new(64 * 1024);
+
+#[cfg(feature = "cookie")]
+fn cookies_from_headers(headers: &HeaderMap) -> CookieJar {
+    let mut cookies = CookieJar::new();
+    for header in headers.get_all(http::header::COOKIE) {
+        if let Ok(header) = header.to_str() {
+            for cookie in header.split(';').map(str::trim) {
+                if let Ok(cookie) = Cookie::parse_encoded(cookie).map(Cookie::into_owned) {
+                    cookies.add_original(cookie);
+                }
+            }
+        }
+    }
+    cookies
+}
+
+#[cfg(feature = "response-observers")]
+type ResponseObserver = Box<dyn FnOnce(&Response) + Send>;
+
+#[cfg(feature = "response-observers")]
+pub(crate) struct ResponseObservers(Mutex<Option<Vec<ResponseObserver>>>);
+
+#[cfg(feature = "response-observers")]
+impl Default for ResponseObservers {
+    fn default() -> Self {
+        Self(Mutex::new(Some(Vec::new())))
+    }
+}
+
+#[cfg(feature = "response-observers")]
+impl ResponseObservers {
+    pub(crate) fn observe(&self, res: &Response) {
+        // Close registration and release the lock before invoking application code.
+        let observers = self.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(observers) = observers {
+            for observer in observers {
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(res))).is_err()
+                {
+                    tracing::error!("final response observer panicked");
+                }
+            }
+        }
+    }
+}
 
 /// Returns the process-wide fallback limit for bounded request-body reads.
 ///
@@ -165,6 +211,10 @@ pub struct Request {
     // The request body as a reader.
     pub(crate) body: ReqBody,
     pub(crate) extensions: Extensions,
+    // Service owns the queue: replacing this Request cannot discard observers,
+    // and retaining it cannot keep observers alive after Service cancellation.
+    #[cfg(feature = "response-observers")]
+    pub(crate) response_observers: Weak<ResponseObservers>,
 
     // The request method.
     method: Method,
@@ -185,6 +235,7 @@ pub struct Request {
     pub(crate) remote_addr: SocketAddr,
 
     pub(crate) secure_max_size: Option<usize>,
+    pub(crate) form_limits: FormLimits,
     #[cfg(feature = "matched-path")]
     pub(crate) matched_path: String,
 }
@@ -222,6 +273,8 @@ impl Request {
             headers: HeaderMap::default(),
             body: ReqBody::default(),
             extensions: Extensions::default(),
+            #[cfg(feature = "response-observers")]
+            response_observers: Weak::new(),
             method: Method::default(),
             #[cfg(feature = "cookie")]
             cookies: CookieJar::default(),
@@ -234,6 +287,7 @@ impl Request {
             local_addr: SocketAddr::Unknown,
             remote_addr: SocketAddr::Unknown,
             secure_max_size: None,
+            form_limits: FormLimits::default(),
             #[cfg(feature = "matched-path")]
             matched_path: Default::default(),
         }
@@ -266,21 +320,7 @@ impl Request {
 
         // Set the request cookies, if they exist.
         #[cfg(feature = "cookie")]
-        let cookies = {
-            let mut cookie_jar = CookieJar::new();
-            for header in headers.get_all(http::header::COOKIE) {
-                if let Ok(header) = header.to_str() {
-                    for cookie_str in header.split(';').map(|s| s.trim()) {
-                        if let Ok(cookie) =
-                            Cookie::parse_encoded(cookie_str).map(|c| c.into_owned())
-                        {
-                            cookie_jar.add_original(cookie);
-                        }
-                    }
-                }
-            }
-            cookie_jar
-        };
+        let cookies = cookies_from_headers(&headers);
 
         Self {
             queries: OnceLock::new(),
@@ -289,6 +329,8 @@ impl Request {
             body: body.into(),
             extensions,
             method,
+            #[cfg(feature = "response-observers")]
+            response_observers: Weak::new(),
             #[cfg(feature = "cookie")]
             cookies,
             // accept: None,
@@ -301,9 +343,42 @@ impl Request {
             version,
             scheme,
             secure_max_size: None,
+            form_limits: FormLimits::default(),
             #[cfg(feature = "matched-path")]
             matched_path: Default::default(),
         }
+    }
+
+    /// Registers a one-shot observer of the response finalized by [`crate::Service`].
+    ///
+    /// Observers run in registration order after middleware, media-type checks,
+    /// catchers and HEAD body removal, before transmission starts. They cannot
+    /// change the response and should not block. Unwinding panics are logged and
+    /// isolated so the remaining observers still run.
+    /// Replacing or moving the Request does not discard registered observers.
+    /// Capture any needed request metadata when registering the callback.
+    ///
+    /// Returns the callback unchanged when this request is not being processed
+    /// by a Service, allowing middleware called directly to observe its response
+    /// after `call_next` instead. If the Service future is cancelled or unwinds
+    /// without producing a response, callbacks are dropped without being called;
+    /// captured RAII guards can perform cancellation cleanup.
+    ///
+    /// Requires the `response-observers` feature, enabled automatically by `salvo-otel`.
+    #[cfg(feature = "response-observers")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "response-observers")))]
+    pub fn try_on_response<F>(&mut self, observer: F) -> Result<(), F>
+    where
+        F: FnOnce(&Response) + Send + 'static,
+    {
+        if let Some(queue) = self.response_observers.upgrade() {
+            let mut pending = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(observers) = pending.as_mut() {
+                observers.push(Box::new(observer));
+                return Ok(());
+            }
+        }
+        Err(observer)
     }
 
     /// Strip the request to [`hyper::Request`].
@@ -318,7 +393,10 @@ impl Request {
             .uri(self.uri.clone())
             .version(self.version);
         if let Some(headers) = builder.headers_mut() {
-            *headers = std::mem::take(&mut self.headers);
+            // Keep the original headers so merge_hyper can identify changes to
+            // the inputs of parsed form and cookie caches. HeaderValue clones
+            // share their underlying storage.
+            *headers = self.headers.clone();
         }
         if let Some(extensions) = builder.extensions_mut() {
             *extensions = std::mem::take(&mut self.extensions);
@@ -331,6 +409,13 @@ impl Request {
     }
 
     /// Merge data from [`hyper::Request`].
+    ///
+    /// Refreshes cached queries when the query changes, parsed forms when
+    /// Content-Type parsing semantics change, and cookies when Cookie changes. Any body other
+    /// than [`ReqBody::None`] replaces the body caches. An unchanged, already-consumed
+    /// [`ReqBody::None`] preserves them across a Tower pass-through; adapters
+    /// deliberately replacing a consumed body with an empty one should use
+    /// `ReqBody::from("")` to distinguish it from that pass-through.
     #[doc(hidden)]
     pub fn merge_hyper(&mut self, hyper_req: hyper::Request<ReqBody>) {
         let (
@@ -345,6 +430,21 @@ impl Request {
             body,
         ) = hyper_req.into_parts();
 
+        if self.uri.query() != uri.query() {
+            self.queries = OnceLock::new();
+        }
+        if !body.is_none() {
+            self.clear_body_cache();
+        } else if self.form_data.get().is_some()
+            && self.headers.get_all(CONTENT_TYPE) != headers.get_all(CONTENT_TYPE)
+            && !same_form_content_type(&self.headers, &headers)
+        {
+            self.form_data = tokio::sync::OnceCell::new();
+        }
+        #[cfg(feature = "cookie")]
+        if self.headers.get_all(http::header::COOKIE) != headers.get_all(http::header::COOKIE) {
+            self.cookies = cookies_from_headers(&headers);
+        }
         self.method = method;
         self.uri = uri;
         self.version = version;
@@ -704,6 +804,21 @@ impl Request {
     /// otherwise returns the global default (64KB).
     pub fn secure_max_size(&self) -> usize {
         self.secure_max_size.unwrap_or_else(global_secure_max_size)
+    }
+
+    /// Sets multipart part and file count limits for the first form parse.
+    ///
+    /// Defaults to 128 total parts and 32 file parts. Set this before any call
+    /// that parses form data; an already parsed form remains cached. Count
+    /// limits also apply when parsing a previously cached raw payload.
+    /// Use [`FormLimits`] as middleware to configure a route subtree.
+    pub fn set_form_limits(&mut self, limits: FormLimits) {
+        self.form_limits = limits;
+    }
+
+    /// Returns the multipart part and file count limits for this request.
+    pub fn form_limits(&self) -> FormLimits {
+        self.form_limits
     }
 
     cfg_feature! {
@@ -1258,6 +1373,9 @@ impl Request {
     ///
     /// For multipart form data, file uploads are written to temporary files but the
     /// overall request size is still subject to the secure max size limit.
+    /// Multipart forms also allow at most 128 parts and 32 files by default;
+    /// configure these counts with [`Request::set_form_limits`] or [`FormLimits`].
+    /// Exceeding either count returns [`ParseError::PayloadTooLarge`] (HTTP 413).
     ///
     /// # Examples
     ///
@@ -1299,6 +1417,7 @@ impl Request {
     /// ```
     #[inline]
     pub async fn form_data_max_size(&mut self, max_size: usize) -> ParseResult<&FormData> {
+        let limits = self.form_limits;
         if self.form_data.get().is_some() {
             return Ok(self
                 .form_data
@@ -1313,7 +1432,8 @@ impl Request {
                     let headers = self.headers();
                     self.form_data
                         .get_or_try_init(|| async {
-                            FormData::read(headers, ReqBody::Once(bytes).into_data_stream()).await
+                            FormData::read(headers, ReqBody::Once(bytes).into_data_stream(), limits)
+                                .await
                         })
                         .await
                 } else {
@@ -1321,7 +1441,7 @@ impl Request {
                     let limited = Limited::new(body, max_size);
                     self.form_data
                         .get_or_try_init(|| async {
-                            FormData::read(headers, limited.into_data_stream()).await
+                            FormData::read(headers, limited.into_data_stream(), limits).await
                         })
                         .await
                 }
@@ -1557,6 +1677,36 @@ fn is_form_content_type(ctype: &Mime) -> bool {
     ctype.subtype() == mime::WWW_FORM_URLENCODED || ctype.type_() == mime::MULTIPART
 }
 
+// Match the dispatch and boundary parsing in FormData::read. URL-encoded
+// parsing ignores all Content-Type parameters, including charset. Multipart
+// parsing uses the decoded, case-sensitive boundary; MIME spelling, quoting
+// and unrelated parameters do not affect the already-parsed fields/files.
+fn same_form_content_type(left: &HeaderMap, right: &HeaderMap) -> bool {
+    fn parse(headers: &HeaderMap) -> Option<(&str, Mime)> {
+        let value = headers.get(CONTENT_TYPE)?.to_str().ok()?;
+        let mime = value.parse::<Mime>().ok()?;
+        Some((value, mime))
+    }
+    let (Some((left_value, left_mime)), Some((right_value, right_mime))) =
+        (parse(left), parse(right))
+    else {
+        return false;
+    };
+    if left_mime.subtype() == mime::WWW_FORM_URLENCODED {
+        return right_mime.subtype() == mime::WWW_FORM_URLENCODED;
+    }
+    if right_mime.subtype() == mime::WWW_FORM_URLENCODED {
+        return false;
+    }
+    if left_mime.type_() == mime::MULTIPART && right_mime.type_() == mime::MULTIPART {
+        return multra::parse_boundary(left_value)
+            .ok()
+            .zip(multra::parse_boundary(right_value).ok())
+            .is_some_and(|(left, right)| left == right);
+    }
+    false
+}
+
 fn is_length_limit_error(error: &(dyn StdError + 'static)) -> bool {
     if error.is::<http_body_util::LengthLimitError>() {
         return true;
@@ -1583,6 +1733,97 @@ mod tests {
 
     use super::*;
     use crate::test::TestClient;
+
+    #[cfg(feature = "cookie")]
+    #[test]
+    fn merge_hyper_refreshes_changed_cookie_headers() {
+        let mut req = TestClient::get("http://localhost/")
+            .add_header("cookie", "original=old; removed=old", true)
+            .build();
+        assert_eq!(req.cookie("original").unwrap().value(), "old");
+        let mut hyper = req.strip_to_hyper::<ReqBody>().unwrap();
+        hyper
+            .headers_mut()
+            .insert(http::header::COOKIE, "original=new".parse().unwrap());
+        hyper
+            .headers_mut()
+            .append(http::header::COOKIE, "additional=new".parse().unwrap());
+        req.merge_hyper(hyper);
+        assert_eq!(req.cookie("original").unwrap().value(), "new");
+        assert_eq!(req.cookie("additional").unwrap().value(), "new");
+        assert!(req.cookie("removed").is_none());
+        let mut hyper = req.strip_to_hyper::<ReqBody>().unwrap();
+        hyper.headers_mut().remove(http::header::COOKIE);
+        req.merge_hyper(hyper);
+        assert!(req.cookies().iter().next().is_none());
+    }
+
+    #[cfg(feature = "cookie")]
+    #[test]
+    fn merge_hyper_preserves_cookie_edits_when_headers_are_unchanged() {
+        let mut req = TestClient::get("http://localhost/")
+            .add_header("cookie", "original=old", true)
+            .build();
+        req.cookies_mut().add(Cookie::new("original", "middleware"));
+        req.cookies_mut().add(Cookie::new("added", "middleware"));
+        let hyper = req.strip_to_hyper::<ReqBody>().unwrap();
+        req.merge_hyper(hyper);
+        assert_eq!(req.cookie("original").unwrap().value(), "middleware");
+        assert_eq!(req.cookie("added").unwrap().value(), "middleware");
+    }
+
+    #[test]
+    #[cfg(feature = "response-observers")]
+    fn response_observer_returns_callback_without_service() {
+        let mut req = Request::new();
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = called.clone();
+        let callback = req.try_on_response(move |_| observed.store(true, Ordering::SeqCst));
+        assert!(!called.load(Ordering::SeqCst));
+        if let Err(callback) = callback {
+            callback(&Response::new());
+        } else {
+            panic!("standalone request must return the callback");
+        }
+        assert!(called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    #[cfg(feature = "response-observers")]
+    fn response_observers_survive_conversion_and_run_once_in_order_despite_panics() {
+        let mut req = Request::new();
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Request>();
+        let observers = std::sync::Arc::new(ResponseObservers::default());
+        req.response_observers = std::sync::Arc::downgrade(&observers);
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        for index in 0..3 {
+            let calls = calls.clone();
+            assert!(
+                req.try_on_response(move |res| {
+                    assert_eq!(res.status_code, Some(http::StatusCode::ACCEPTED));
+                    calls.lock().unwrap().push(index);
+                    if index == 1 {
+                        panic!("observer must not break response finalization");
+                    }
+                })
+                .is_ok()
+            );
+        }
+        let hyper = req.strip_to_hyper::<ReqBody>().unwrap();
+        req.merge_hyper(hyper);
+        let mut res = Response::new();
+        res.status_code(http::StatusCode::ACCEPTED);
+        let registration = req.response_observers.clone();
+        // Tower layers can consume the entire original request on a short circuit.
+        drop(req);
+        observers.observe(&res);
+        observers.observe(&res);
+        assert_eq!(*calls.lock().unwrap(), [0, 1, 2]);
+        let mut late_request = Request::new();
+        late_request.response_observers = registration;
+        assert!(late_request.try_on_response(|_| {}).is_err());
+    }
 
     #[tokio::test]
     async fn test_parse_queries() {

@@ -21,11 +21,11 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use super::{ChunkedFile, ChunkedState};
 use crate::http::body::ResBody;
 use crate::http::header::{
-    CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_TYPE, IF_NONE_MATCH, RANGE,
+    CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH, IF_RANGE, RANGE,
     X_CONTENT_TYPE_OPTIONS,
 };
 use crate::http::mime::{detect_text_mime, fill_mime_charset_if_need, is_charset_required_mime};
-use crate::http::{HttpRange, Request, Response, StatusCode, StatusError};
+use crate::http::{HttpRange, Method, Request, Response, StatusCode, StatusError};
 use crate::{Depot, Error, Result, Writer, async_trait};
 
 const CHUNK_SIZE: u64 = 1024 * 1024;
@@ -803,13 +803,16 @@ impl NamedFile {
 
     /// Consume self and send only the headers to [`Response`].
     ///
-    /// This follows the same conditional and range handling as [`Self::send`], but does not attach
-    /// a response body.
+    /// This follows the same conditional handling as [`Self::send`], but ignores `Range` and
+    /// does not attach a response body, as required for a HEAD request.
     pub async fn send_head(self, req_headers: &HeaderMap, res: &mut Response) {
         self.send_inner(req_headers, res, false).await;
     }
 
     async fn send_inner(mut self, req_headers: &HeaderMap, res: &mut Response, send_body: bool) {
+        if !send_body {
+            res.take_body();
+        }
         let etag = if self.flags.contains(Flag::Etag) {
             self.etag()
         } else {
@@ -824,6 +827,10 @@ impl NamedFile {
         // check preconditions
         let precondition_failed = if !any_match(etag.as_ref(), req_headers) {
             true
+        } else if req_headers.contains_key(IF_MATCH) {
+            // If-Match takes precedence over If-Unmodified-Since (RFC 9110,
+            // section 13.1.4), including the wildcard existence precondition.
+            false
         } else if let (Some(last_modified), Some(since)) =
             (&last_modified, req_headers.typed_get::<IfUnmodifiedSince>())
         {
@@ -846,6 +853,18 @@ impl NamedFile {
         } else {
             false
         };
+
+        // If-Range uses strong entity-tag comparison or an exact HTTP-date
+        // match. A failed (or invalid) validator ignores Range, even when the
+        // requested range would otherwise be unsatisfiable.
+        let range_allowed = !req_headers.contains_key(IF_RANGE)
+            || req_headers.typed_get::<IfRange>().is_some_and(|if_range| {
+                etag.as_ref()
+                    .is_some_and(|etag| if_range == IfRange::etag(etag.clone()))
+                    || last_modified
+                        .and_then(|mtime| self.encodable_last_modified(mtime))
+                        .is_some_and(|mtime| if_range == IfRange::date(mtime))
+            });
 
         // A caller may have already chosen the response's Content-Type. Default
         // the disposition from the type the client will actually receive, not
@@ -913,12 +932,20 @@ impl NamedFile {
             return;
         }
 
+        // Range only applies to GET. HEAD describes the entire representation,
+        // even if the requested range is malformed or unsatisfiable.
+        if !send_body {
+            res.status_code(StatusCode::OK);
+            res.headers_mut().typed_insert(ContentLength(length));
+            return;
+        }
+
         let file_size = self.metadata.len();
         let mut offset = 0;
         let mut is_partial = false;
 
         // check for range header
-        if let Some(range) = req_headers.get(RANGE) {
+        if let Some(range) = req_headers.get(RANGE).filter(|_| range_allowed) {
             let Ok(range) = range.to_str() else {
                 res.status_code(StatusCode::BAD_REQUEST);
                 return;
@@ -960,10 +987,6 @@ impl NamedFile {
             }
             res.headers_mut().typed_insert(ContentLength(total_size));
 
-            if !send_body {
-                return;
-            }
-
             // Fast path: slice from preread bytes if available
             if let Some(preread) = self.preread.take() {
                 let end = cmp::min(offset.saturating_add(total_size) as usize, preread.len());
@@ -983,10 +1006,6 @@ impl NamedFile {
             // Full file response
             res.status_code(StatusCode::OK);
             res.headers_mut().typed_insert(ContentLength(length));
-
-            if !send_body {
-                return;
-            }
 
             // Fast path: send preread bytes directly — zero spawn_blocking calls
             if let Some(preread) = self.preread.take() {
@@ -1008,7 +1027,11 @@ impl NamedFile {
 #[async_trait]
 impl Writer for NamedFile {
     async fn write(self, req: &mut Request, _depot: &mut Depot, res: &mut Response) {
-        self.send(req.headers(), res).await;
+        if req.method() == Method::HEAD {
+            self.send_head(req.headers(), res).await;
+        } else {
+            self.send(req.headers(), res).await;
+        }
     }
 }
 
@@ -1074,6 +1097,155 @@ fn none_match(etag: Option<&ETag>, req_headers: &HeaderMap) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn if_match_takes_precedence_over_if_unmodified_since() {
+        use crate::http::header::IF_UNMODIFIED_SINCE;
+        use crate::test::ResponseExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("preconditions.txt");
+        std::fs::write(&path, b"content").unwrap();
+        for (if_match, expected) in [
+            (Some("matching"), StatusCode::OK),
+            (Some("*"), StatusCode::OK),
+            (Some("\"outdated\""), StatusCode::PRECONDITION_FAILED),
+            (Some("weak"), StatusCode::PRECONDITION_FAILED),
+            (None, StatusCode::PRECONDITION_FAILED),
+        ] {
+            for head in [false, true] {
+                let mut file = NamedFile::open(&path).await.unwrap();
+                // Deterministic times, independent of filesystem timestamps.
+                file.modified = Some(UNIX_EPOCH + Duration::from_secs(100));
+                let mut headers = HeaderMap::new();
+                if let Some(value) = if_match {
+                    // Derive the matching validator after setting the timestamp.
+                    if value == "matching" || value == "weak" {
+                        let mut current = HeaderMap::new();
+                        current.typed_insert(file.etag().unwrap());
+                        let value = current[crate::http::header::ETAG].to_str().unwrap();
+                        headers.insert(
+                            IF_MATCH,
+                            if if_match == Some("matching") {
+                                value.parse().unwrap()
+                            } else {
+                                format!("W/{value}").parse().unwrap()
+                            },
+                        );
+                    } else {
+                        headers.insert(IF_MATCH, value.parse().unwrap());
+                    }
+                }
+                headers.insert(
+                    IF_UNMODIFIED_SINCE,
+                    "Thu, 01 Jan 1970 00:00:00 GMT".parse().unwrap(),
+                );
+                let mut res = Response::new();
+                if head {
+                    file.send_head(&headers, &mut res).await;
+                } else {
+                    file.send(&headers, &mut res).await;
+                }
+                assert_eq!(res.status_code, Some(expected));
+                let body = res.take_bytes(None).await.unwrap();
+                if !head && expected == StatusCode::OK {
+                    assert_eq!(body.as_ref(), b"content");
+                } else {
+                    assert!(body.is_empty());
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn if_range_requires_a_matching_validator() {
+        use crate::test::ResponseExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("range.txt");
+        std::fs::write(&path, b"new-content").unwrap();
+        let file = NamedFile::open(&path).await.unwrap();
+        let etag = file.etag().unwrap();
+        let mut etag_headers = HeaderMap::new();
+        etag_headers.typed_insert(etag.clone());
+        let weak_etag = format!("W/{}", etag_headers["etag"].to_str().unwrap())
+            .parse()
+            .unwrap();
+        let modified = file.last_modified().unwrap();
+        let valid_date = IfRange::date(modified);
+        for (validator, expected_status, expected_body) in [
+            (
+                IfRange::etag("\"old-etag\"".parse().unwrap()),
+                StatusCode::OK,
+                "new-content",
+            ),
+            (
+                IfRange::etag(etag.clone()),
+                StatusCode::PARTIAL_CONTENT,
+                "content",
+            ),
+            (IfRange::etag(weak_etag), StatusCode::OK, "new-content"),
+            (
+                IfRange::date(modified - Duration::from_secs(60)),
+                StatusCode::OK,
+                "new-content",
+            ),
+            (
+                IfRange::date(modified + Duration::from_secs(60)),
+                StatusCode::OK,
+                "new-content",
+            ),
+            (valid_date, StatusCode::PARTIAL_CONTENT, "content"),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(RANGE, HeaderValue::from_static("bytes=4-"));
+            headers.typed_insert(validator);
+            let mut response = Response::new();
+            NamedFile::open(&path)
+                .await
+                .unwrap()
+                .send(&headers, &mut response)
+                .await;
+            assert_eq!(response.status_code, Some(expected_status));
+            assert_eq!(response.take_string().await.unwrap(), expected_body);
+        }
+
+        // A failed validator must bypass even an unsatisfiable Range.
+        let mut headers = HeaderMap::new();
+        headers.insert(RANGE, HeaderValue::from_static("bytes=100-"));
+        headers.typed_insert(IfRange::etag("\"old-etag\"".parse().unwrap()));
+        let mut response = Response::new();
+        NamedFile::open(&path)
+            .await
+            .unwrap()
+            .send_head(&headers, &mut response)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert!(response.body.is_none());
+
+        headers.insert(RANGE, HeaderValue::from_static("bytes=4-"));
+        headers.insert(IF_RANGE, HeaderValue::from_static("invalid-validator"));
+        let mut response = Response::new();
+        NamedFile::open(&path)
+            .await
+            .unwrap()
+            .send(&headers, &mut response)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "new-content");
+
+        headers.typed_insert(IfRange::etag(etag));
+        let named = NamedFile::builder(&path)
+            .use_etag(false)
+            .use_last_modified(false)
+            .build()
+            .await
+            .unwrap();
+        let mut response = Response::new();
+        named.send(&headers, &mut response).await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "new-content");
+    }
 
     #[test]
     fn content_disposition_escapes_quoted_filename() {

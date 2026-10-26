@@ -19,7 +19,7 @@ use parking_lot::RwLock;
 use regex::Regex;
 
 use crate::async_trait;
-use crate::http::Request;
+use crate::http::{Method, Request};
 use crate::routing::{Filter, FilterInfo, PathState};
 
 /// A single matching unit of a path pattern.
@@ -59,8 +59,8 @@ pub trait WispBuilder: Send + Sync {
 type WispBuilderMap = RwLock<HashMap<String, Arc<dyn WispBuilder>>>;
 static WISP_BUILDERS: LazyLock<WispBuilderMap> = LazyLock::new(|| {
     let mut map: HashMap<String, Arc<dyn WispBuilder>> = HashMap::with_capacity(8);
-    map.insert("num".into(), Arc::new(CharsWispBuilder::new(is_num)));
-    map.insert("hex".into(), Arc::new(CharsWispBuilder::new(is_hex)));
+    map.insert("num".into(), Arc::new(CharsWispBuilder::builtin(is_num)));
+    map.insert("hex".into(), Arc::new(CharsWispBuilder::builtin(is_hex)));
     RwLock::new(map)
 });
 static NEVER_MATCH_PATH_REGEX: LazyLock<Regex> =
@@ -184,7 +184,10 @@ impl WispBuilder for RegexWispBuilder {
 }
 
 /// A [`WispBuilder`] that builds a [`CharsWisp`] from a per-character checker.
-pub struct CharsWispBuilder(Arc<dyn Fn(char) -> bool + Send + Sync + 'static>);
+pub struct CharsWispBuilder {
+    checker: Arc<dyn Fn(char) -> bool + Send + Sync + 'static>,
+    method_probe_safe: bool,
+}
 impl CharsWispBuilder {
     /// Creates a new `CharsWispBuilder`.
     #[inline]
@@ -192,7 +195,17 @@ impl CharsWispBuilder {
     where
         C: Fn(char) -> bool + Send + Sync + 'static,
     {
-        Self(Arc::new(checker))
+        Self {
+            checker: Arc::new(checker),
+            method_probe_safe: false,
+        }
+    }
+
+    fn builtin(checker: fn(char) -> bool) -> Self {
+        Self {
+            checker: Arc::new(checker),
+            method_probe_safe: true,
+        }
     }
 }
 impl Debug for CharsWispBuilder {
@@ -205,7 +218,8 @@ impl WispBuilder for CharsWispBuilder {
         if args.is_empty() {
             return Ok(CharsWisp {
                 name,
-                checker: self.0.clone(),
+                checker: self.checker.clone(),
+                method_probe_safe: self.method_probe_safe,
                 min_width: 1,
                 max_width: None,
             }
@@ -260,7 +274,8 @@ impl WispBuilder for CharsWispBuilder {
         };
         Ok(CharsWisp {
             name,
-            checker: self.0.clone(),
+            checker: self.checker.clone(),
+            method_probe_safe: self.method_probe_safe,
             min_width,
             max_width,
         }
@@ -272,6 +287,7 @@ impl WispBuilder for CharsWispBuilder {
 pub struct CharsWisp {
     name: String,
     checker: Arc<dyn Fn(char) -> bool + Send + Sync + 'static>,
+    method_probe_safe: bool,
     min_width: usize,
     max_width: Option<usize>,
 }
@@ -375,7 +391,7 @@ impl CombWisp {
                         wild_start = Some(star_mark.to_owned());
                         names.push(name.to_owned());
                     } else {
-                        comb_regex.push_str(&format!("(?<{}>.*)", &regex::escape(&wisp.0)));
+                        comb_regex.push_str(&format!("(?<{}>.*)", regex::escape(&wisp.0)));
                         names.push(wisp.0);
                     }
                 }
@@ -1037,11 +1053,29 @@ pub struct PathFilter {
 
 impl Debug for PathFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "path:{}", &self.raw_value)
+        write!(f, "path:{}", self.raw_value)
     }
 }
 #[async_trait]
 impl Filter for PathFilter {
+    async fn filter_for_method(
+        &self,
+        _req: &mut Request,
+        state: &mut PathState<'_>,
+        _method: &Method,
+    ) -> Option<bool> {
+        // Character checkers registered by the application are callbacks too.
+        // Only the built-in num/hex checkers are known to be safe to replay.
+        if self
+            .path_wisps
+            .iter()
+            .any(|wisp| matches!(wisp, WispKind::Chars(chars) if !chars.method_probe_safe))
+        {
+            return None;
+        }
+        Some(self.detect(state))
+    }
+
     #[inline]
     async fn filter(&self, _req: &mut Request, state: &mut PathState<'_>) -> bool {
         self.detect(state)
@@ -1129,16 +1163,16 @@ impl PathFilter {
     }
     /// Detect is that path is match.
     pub fn detect(&self, state: &mut PathState<'_>) -> bool {
-        let original_cursor = state.cursor;
+        let checkpoint = state.checkpoint();
         for ps in &self.path_wisps {
             let row = state.cursor.0;
             if ps.detect(state) {
                 if row == state.cursor.0 && row != state.parts_len() {
-                    state.cursor = original_cursor;
+                    state.rollback(checkpoint);
                     return false;
                 }
             } else {
-                state.cursor = original_cursor;
+                state.rollback(checkpoint);
                 return false;
             }
         }
@@ -1301,6 +1335,7 @@ mod tests {
         let wisp = CharsWisp {
             name: "id".to_owned(),
             checker: Arc::new(is_num),
+            method_probe_safe: false,
             min_width: 1,
             max_width: None,
         };
@@ -1315,6 +1350,7 @@ mod tests {
         let wisp = CharsWisp {
             name: "x".to_owned(),
             checker: Arc::new(|c: char| c != '/'),
+            method_probe_safe: false,
             min_width: 1,
             max_width: None,
         };
@@ -1472,6 +1508,7 @@ mod tests {
         let mut state =
             PathState::from_borrowed_path("/users/123e4567-e89b-12d3-a456-9AC7CBDCEE52");
         assert!(filter.detect(&mut state));
+        #[cfg(feature = "matched-path")]
         assert_eq!(
             state.matched_parts,
             vec!["users".to_owned(), "{id}".to_owned()]
@@ -1482,6 +1519,7 @@ mod tests {
         let filter = PathFilter::new("/users/{id}/{**rest}");
         let mut state = PathState::from_borrowed_path("/users/12/facebook/insights/23");
         assert!(filter.detect(&mut state));
+        #[cfg(feature = "matched-path")]
         assert_eq!(
             state.matched_parts,
             vec!["users".to_owned(), "{id}".to_owned(), "{**rest}".to_owned()]
@@ -1490,6 +1528,7 @@ mod tests {
         assert!(filter.detect(&mut state));
         let mut state = PathState::from_borrowed_path("/users/12");
         assert!(filter.detect(&mut state));
+        #[cfg(feature = "matched-path")]
         assert_eq!(
             state.matched_parts,
             vec!["users".to_owned(), "{id}".to_owned(), "{**rest}".to_owned()]
@@ -1512,6 +1551,7 @@ mod tests {
         assert!(filter.detect(&mut state));
         let mut state = PathState::from_borrowed_path("/users/12/abc");
         assert!(filter.detect(&mut state));
+        #[cfg(feature = "matched-path")]
         assert_eq!(
             state.matched_parts,
             vec!["users".to_owned(), "{id}".to_owned(), "{*?rest}".to_owned()]

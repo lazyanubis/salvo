@@ -5,13 +5,15 @@ use std::marker::PhantomData;
 use rust_embed::{EmbeddedFile, Metadata, RustEmbed};
 use salvo_core::handler::Handler;
 use salvo_core::http::header::{
-    ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RANGE,
+    ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_NONE_MATCH, IF_RANGE, RANGE,
     X_CONTENT_TYPE_OPTIONS,
 };
-use salvo_core::http::headers::{ContentLength, ContentRange, HeaderMapExt};
+use salvo_core::http::headers::{
+    ContentLength, ContentRange, ETag, HeaderMapExt, IfMatch, IfRange,
+};
 use salvo_core::http::mime::fill_mime_charset_if_need;
-use salvo_core::http::{HeaderValue, HttpRange, Mime, Request, Response, StatusCode};
-use salvo_core::routing::{decode_url_path, redirect_to_dir_url, normalize_url_path};
+use salvo_core::http::{HeaderValue, HttpRange, Method, Mime, Request, Response, StatusCode};
+use salvo_core::routing::{decode_url_path, normalize_url_path, redirect_to_dir_url};
 use salvo_core::{Depot, FlowCtrl, IntoVecString, async_trait};
 
 /// Handler that serves embedded files using `rust-embed`.
@@ -106,6 +108,9 @@ fn render_embedded_data(
     res: &mut Response,
     mime: Option<Mime>,
 ) {
+    if req.method() == Method::HEAD {
+        res.take_body();
+    }
     // Determine Content-Type once
     let content_type =
         if let Some(mut mime) = mime.or_else(|| mime_infer::from_path(req.uri().path()).first()) {
@@ -140,6 +145,18 @@ fn render_embedded_data(
         tracing::error!("Failed to parse etag: {etag}");
     }
 
+    // Evaluate If-Match first: its strong comparison takes precedence over
+    // cache revalidation and range selection for this existing representation.
+    if let Some(if_match) = req.headers().typed_get::<IfMatch>()
+        && res
+            .headers()
+            .typed_get::<ETag>()
+            .is_none_or(|etag| !if_match.precondition_passes(&etag))
+    {
+        res.status_code(StatusCode::PRECONDITION_FAILED);
+        return;
+    }
+
     let not_modified = req
         .headers()
         .get(IF_NONE_MATCH)
@@ -155,11 +172,23 @@ fn render_embedded_data(
         .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
 
     let total_data_len = data.len() as u64;
+    if req.method() == Method::HEAD {
+        res.status_code(StatusCode::OK);
+        res.headers_mut()
+            .typed_insert(ContentLength(total_data_len));
+        return;
+    }
     let mut is_partial_content = false;
     let mut range_to_send: Option<(u64, u64)> = None; // (start_offset, length_of_part)
 
     let req_headers = req.headers();
-    if let Some(range_header_val) = req_headers.get(RANGE) {
+    // Embedded assets expose only an ETag validator. Dates, weak tags and
+    // invalid If-Range values must therefore fall back to the full response.
+    let range_allowed = !req_headers.contains_key(IF_RANGE)
+        || req_headers.typed_get::<IfRange>().is_some_and(|if_range| {
+            !if_range.is_modified(res.headers().typed_get::<ETag>().as_ref(), None)
+        });
+    if let Some(range_header_val) = req_headers.get(RANGE).filter(|_| range_allowed) {
         if let Ok(range_str) = range_header_val.to_str() {
             match HttpRange::parse(range_str, total_data_len) {
                 Ok(ranges) if !ranges.is_empty() => {
@@ -376,6 +405,169 @@ impl EmbeddedFileExt for EmbeddedFile {
 #[cfg(test)]
 mod tests {
     use super::if_none_match_matches;
+
+    #[tokio::test]
+    async fn embedded_if_match_precedes_cache_and_range_conditions() {
+        use rust_embed::RustEmbed;
+        use salvo_core::prelude::*;
+        use salvo_core::test::TestClient;
+
+        #[derive(RustEmbed)]
+        #[folder = "test/static/"]
+        struct Assets;
+
+        let service =
+            Service::new(Router::with_path("{*path}").goal(super::StaticEmbed::<Assets>::new()));
+        let original = TestClient::get("http://localhost/test1.txt")
+            .send(&service)
+            .await;
+        let etag = original.headers()["etag"].to_str().unwrap().to_owned();
+        for (if_match, if_none_match, range, expected) in [
+            (
+                "\"old\"".to_owned(),
+                None,
+                None,
+                StatusCode::PRECONDITION_FAILED,
+            ),
+            (
+                format!("W/{etag}"),
+                None,
+                None,
+                StatusCode::PRECONDITION_FAILED,
+            ),
+            (etag.clone(), None, None, StatusCode::OK),
+            (format!("\"other\", {etag}"), None, None, StatusCode::OK),
+            ("*".to_owned(), None, None, StatusCode::OK),
+            (
+                "\"old\"".to_owned(),
+                Some(etag.clone()),
+                Some("bytes=999999-"),
+                StatusCode::PRECONDITION_FAILED,
+            ),
+            (
+                etag.clone(),
+                Some(etag.clone()),
+                Some("bytes=999999-"),
+                StatusCode::NOT_MODIFIED,
+            ),
+            (
+                etag.clone(),
+                None,
+                Some("bytes=1-"),
+                StatusCode::PARTIAL_CONTENT,
+            ),
+        ] {
+            let mut request = TestClient::get("http://localhost/test1.txt").add_header(
+                "if-match",
+                if_match.clone(),
+                true,
+            );
+            if let Some(tag) = if_none_match {
+                request = request.add_header("if-none-match", tag, true);
+            }
+            if let Some(range) = range {
+                request = request.add_header("range", range, true);
+            }
+            let response = request.send(&service).await;
+            assert_eq!(response.status_code, Some(expected), "{if_match}");
+            assert_eq!(response.headers()["etag"], etag);
+            if expected == StatusCode::PRECONDITION_FAILED || expected == StatusCode::NOT_MODIFIED {
+                assert!(!response.headers().contains_key("content-range"));
+            }
+        }
+        for (if_match, expected) in [
+            ("\"old\"".to_owned(), StatusCode::PRECONDITION_FAILED),
+            (etag.clone(), StatusCode::OK),
+        ] {
+            let response = TestClient::head("http://localhost/test1.txt")
+                .add_header("if-match", if_match, true)
+                .add_header("range", "bytes=999999-", true)
+                .send(&service)
+                .await;
+            assert_eq!(response.status_code, Some(expected));
+            assert!(response.body.is_none());
+            assert!(!response.headers().contains_key("content-range"));
+        }
+    }
+
+    #[tokio::test]
+    async fn if_range_requires_a_matching_strong_etag() {
+        use rust_embed::RustEmbed;
+        use salvo_core::prelude::*;
+        use salvo_core::test::{ResponseExt, TestClient};
+
+        #[derive(RustEmbed)]
+        #[folder = "test/static/"]
+        struct Assets;
+
+        let service =
+            Service::new(Router::with_path("{*path}").get(super::StaticEmbed::<Assets>::new()));
+        let mut original = TestClient::get("http://localhost/test1.txt")
+            .send(&service)
+            .await;
+        let etag = original.headers()["etag"].to_str().unwrap().to_owned();
+        let body = original.take_bytes(None).await.unwrap();
+        for (validator, range, expected) in [
+            (None, "bytes=1-", StatusCode::PARTIAL_CONTENT),
+            (Some(etag.clone()), "bytes=1-", StatusCode::PARTIAL_CONTENT),
+            (Some("\"old\"".into()), "bytes=1-", StatusCode::OK),
+            (Some(format!("W/{etag}")), "bytes=1-", StatusCode::OK),
+            (
+                Some("Tue, 14 Nov 2023 22:13:20 GMT".into()),
+                "bytes=1-",
+                StatusCode::OK,
+            ),
+            (Some("invalid".into()), "bytes=1-", StatusCode::OK),
+            (Some("\"old\"".into()), "bytes=999999-", StatusCode::OK),
+            (Some("\"old\"".into()), "invalid", StatusCode::OK),
+            (
+                Some(etag.clone()),
+                "bytes=999999-",
+                StatusCode::RANGE_NOT_SATISFIABLE,
+            ),
+        ] {
+            let mut request =
+                TestClient::get("http://localhost/test1.txt").add_header("range", range, true);
+            if let Some(validator) = &validator {
+                request = request.add_header("if-range", validator, true);
+            }
+            let mut response = request.send(&service).await;
+            assert_eq!(
+                response.status_code,
+                Some(expected),
+                "{validator:?}, {range}"
+            );
+            assert_eq!(response.headers()["etag"], etag);
+            if expected == StatusCode::OK {
+                assert!(!response.headers().contains_key("content-range"));
+                assert_eq!(response.headers()["content-length"], body.len().to_string());
+                assert_eq!(response.take_bytes(None).await.unwrap(), body);
+            } else if expected == StatusCode::PARTIAL_CONTENT {
+                assert_eq!(
+                    response.headers()["content-range"],
+                    format!("bytes 1-{}/{}", body.len() - 1, body.len())
+                );
+                assert_eq!(
+                    response.headers()["content-length"],
+                    (body.len() - 1).to_string()
+                );
+                assert_eq!(response.take_bytes(None).await.unwrap(), body.slice(1..));
+            } else {
+                assert_eq!(
+                    response.headers()["content-range"],
+                    format!("bytes */{}", body.len())
+                );
+            }
+        }
+        let response = TestClient::get("http://localhost/test1.txt")
+            .add_header("if-none-match", etag, true)
+            .add_header("if-range", "\"old\"", true)
+            .add_header("range", "bytes=999999-", true)
+            .send(&service)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::NOT_MODIFIED));
+        assert!(response.body.is_none());
+    }
 
     #[test]
     fn if_none_match_handles_quoted_weak_and_lists() {

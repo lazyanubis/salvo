@@ -99,65 +99,87 @@ pub(crate) struct NormNode {
 
 impl NormNode {
     pub(crate) fn new(router: &Router, inherited_metadata: Metadata) -> Self {
+        Self::with_method(router, inherited_metadata, None)
+    }
+
+    fn with_method(
+        router: &Router,
+        inherited_metadata: Metadata,
+        mut method: Option<Method>,
+    ) -> Self {
         let mut node = Self {
             // router_id: router.id,
             metadata: inherited_metadata,
             ..Self::default()
         };
-        let registry = METADATA_REGISTRY
+        // Clone out and release the guard before recursing into the children:
+        // re-acquiring a read lock while a writer is queued deadlocks.
+        let metadata = METADATA_REGISTRY
             .read()
-            .expect("failed to lock METADATA_REGISTRY for read");
-        if let Some(metadata) = registry.get(&router.id) {
-            node.metadata.tags.extend(metadata.tags.iter().cloned());
-            node.metadata
-                .securities
-                .extend(metadata.securities.iter().cloned());
+            .expect("failed to lock METADATA_REGISTRY for read")
+            .get(&router.id)
+            .cloned();
+        if let Some(metadata) = metadata {
+            node.metadata.tags.extend(metadata.tags);
+            node.metadata.securities.extend(metadata.securities);
         }
 
         for filter in router.filters() {
             match filter.info() {
                 FilterInfo::Path(path) => {
-                    node.path = Some(normalize_oapi_path(&path));
-                }
-                FilterInfo::Method(method) => {
-                    // Methods with a dedicated Path Item field map to `PathItemType`;
-                    // everything else (CONNECT and custom/extension methods) goes to
-                    // `additionalOperations`, which requires OpenAPI 3.2. Whether such a
-                    // slot is actually emitted is decided later, when the document version
-                    // is known.
-                    let item = match method {
-                        Method::GET => OperationSlot::Standard(PathItemType::Get),
-                        Method::POST => OperationSlot::Standard(PathItemType::Post),
-                        Method::PUT => OperationSlot::Standard(PathItemType::Put),
-                        Method::DELETE => OperationSlot::Standard(PathItemType::Delete),
-                        Method::HEAD => OperationSlot::Standard(PathItemType::Head),
-                        Method::OPTIONS => OperationSlot::Standard(PathItemType::Options),
-                        Method::TRACE => OperationSlot::Standard(PathItemType::Trace),
-                        Method::PATCH => OperationSlot::Standard(PathItemType::Patch),
-                        Method::QUERY => OperationSlot::Standard(PathItemType::Query),
-                        other => OperationSlot::Additional(other.as_str().to_owned()),
-                    };
-                    // A standard method never loses to a custom one, so combining a
-                    // standard method filter with a custom one does not erase the standard
-                    // mapping (the previous string-parsing path had the same behavior via
-                    // its `_ => {}` arm).
-                    if matches!(item, OperationSlot::Standard(_))
-                        || !matches!(node.method, Some(OperationSlot::Standard(_)))
-                    {
-                        node.method = Some(item);
+                    let path = normalize_oapi_path(&path);
+                    if let Some(current) = &mut node.path {
+                        if !path.trim_matches('/').is_empty() {
+                            if current.trim_matches('/').is_empty() {
+                                *current = path;
+                            } else {
+                                current.truncate(current.trim_end_matches('/').len());
+                                current.push('/');
+                                current.push_str(path.trim_start_matches('/'));
+                            }
+                        }
+                    } else {
+                        node.path = Some(path);
                     }
+                }
+                FilterInfo::Method(current) => {
+                    // Router filters and all ancestor filters are conjunctive. A
+                    // different method cannot override an earlier constraint: no
+                    // request can reach this node or any of its descendants.
+                    if method.as_ref().is_some_and(|method| method != &current) {
+                        return node;
+                    }
+                    method = Some(current);
                 }
                 // Other filter kinds (Scheme/Host/Port/Other) do not carry
                 // information that maps to OpenAPI path items.
                 _ => {}
             }
         }
+        // Preserve extension method spelling; version compatibility is checked
+        // when the operation is inserted into the OpenAPI document.
+        node.method = method.as_ref().map(|method| match *method {
+            Method::GET => OperationSlot::Standard(PathItemType::Get),
+            Method::POST => OperationSlot::Standard(PathItemType::Post),
+            Method::PUT => OperationSlot::Standard(PathItemType::Put),
+            Method::DELETE => OperationSlot::Standard(PathItemType::Delete),
+            Method::HEAD => OperationSlot::Standard(PathItemType::Head),
+            Method::OPTIONS => OperationSlot::Standard(PathItemType::Options),
+            Method::TRACE => OperationSlot::Standard(PathItemType::Trace),
+            Method::PATCH => OperationSlot::Standard(PathItemType::Patch),
+            Method::QUERY => OperationSlot::Standard(PathItemType::Query),
+            _ => OperationSlot::Additional(method.as_str().to_owned()),
+        });
         node.handler_type_id = router.goal.as_ref().map(|h| h.type_id());
         node.handler_type_name = router.goal.as_ref().map(|h| h.type_name());
         let routers = router.routers();
         if !routers.is_empty() {
             for router in routers {
-                node.children.push(Self::new(router, node.metadata.clone()));
+                node.children.push(Self::with_method(
+                    router,
+                    node.metadata.clone(),
+                    method.clone(),
+                ));
             }
         }
         node
@@ -254,6 +276,16 @@ mod tests {
     use super::normalize_oapi_path;
 
     #[test]
+    fn repeated_path_filters_keep_constraints_and_slash_boundaries() {
+        let router = salvo_core::Router::new()
+            .path("/api/")
+            .path("/{version:num}/")
+            .path("/");
+        let node = super::NormNode::new(&router, Default::default());
+        assert_eq!(node.path.as_deref(), Some("/api/{version}/"));
+    }
+
+    #[test]
     fn normalize_braced_path_constraints() {
         assert_eq!(normalize_oapi_path("/posts/{id}"), "/posts/{id}");
         assert_eq!(normalize_oapi_path("/posts/{id:num}"), "/posts/{id}");
@@ -267,5 +299,45 @@ mod tests {
             normalize_oapi_path("/posts/article_{id:num}"),
             "/posts/article_{id}"
         );
+    }
+
+    /// Building a document while another thread adds router metadata must not
+    /// deadlock: `NormNode::new` must not hold a registry read guard while it
+    /// recurses, or a queued writer blocks the nested read.
+    #[test]
+    fn merge_router_does_not_deadlock_against_concurrent_oapi_security() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, mpsc};
+        use std::time::Duration;
+
+        use salvo_core::Router;
+
+        use crate::{OpenApi, RouterExt, SecurityRequirement};
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let done = Arc::new(AtomicBool::new(false));
+            let writer = {
+                let done = Arc::clone(&done);
+                std::thread::spawn(move || {
+                    while !done.load(Ordering::Relaxed) {
+                        let _ =
+                            Router::new().oapi_security(SecurityRequirement::new("key", ["scope"]));
+                    }
+                })
+            };
+            for _ in 0..2_000 {
+                let tree = Router::with_path("a").push(
+                    Router::with_path("b")
+                        .push(Router::with_path("c").push(Router::with_path("d"))),
+                );
+                let _ = OpenApi::new("test", "0.0.1").merge_router(&tree);
+            }
+            done.store(true, Ordering::Relaxed);
+            writer.join().expect("writer thread panicked");
+            tx.send(()).expect("receiver is alive");
+        });
+        rx.recv_timeout(Duration::from_secs(30))
+            .expect("merge_router deadlocked against a concurrent oapi_security");
     }
 }

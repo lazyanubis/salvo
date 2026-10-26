@@ -39,7 +39,7 @@ basic-auth = ["dep:base64"]
 caching-headers = ["dep:etag", "dep:tracing"]
 catch-panic = ["dep:futures-util", "dep:tracing"]
 force-https = ["dep:tracing"]
-logging = ["dep:tracing"]
+logging = ["dep:tracing", "salvo_core/response-observers"]
 concurrency-limiter = ["dep:tracing", "tokio"]
 size-limiter = []
 sse = [
@@ -62,9 +62,12 @@ websocket = [
 request-id = ["dep:ulid", "dep:tracing"]
 tower-compat = [
     "dep:futures-util",
+    "dep:hyper",
     "dep:http-body-util",
     "dep:tower",
     "dep:tracing",
+    "tokio/macros",
+    "tokio/sync",
 ]
 
 [dependencies]
@@ -75,7 +78,6 @@ http-body-util = { workspace = true, optional = true }
 hyper = { workspace = true, features = [
     "server",
     "http1",
-    # "http2",
     "client",
 ], optional = true }
 pin-project = { workspace = true, optional = true }
@@ -108,17 +110,14 @@ tokio = { workspace = true, optional = true }
 ulid = { workspace = true, optional = true, features = ["std"] }
 
 [dev-dependencies]
-salvo_core = { workspace = true, features = [
-    "http1",
-    "server",
-    "test",
-    "rustls",
-] }
+salvo_core = { workspace = true, features = ["http1", "server", "test", "rustls", "ring"] }
 time = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 tokio-stream = { workspace = true }
 tower = { workspace = true, features = ["limit"] }
 tracing-test = { workspace = true }
 http-body-util = { workspace = true }
+url = { workspace = true }
 
 [lints]
 workspace = true

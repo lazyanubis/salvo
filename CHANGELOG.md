@@ -6,6 +6,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Validate CSRF tokens for every unsafe HTTP method by default, including CONNECT
+  and extension methods, while preserving explicit skipper overrides.
+- Clean up interrupted multipart uploads and keep temporary files alive until
+  the last `FilePart` clone is released.
+- Bound multipart parsing to 128 parts and 32 files by default, rejecting count
+  overflows with HTTP 413 before creating additional temporary files. Configure
+  larger or smaller route-specific limits with `FormLimits` middleware or
+  `Request::set_form_limits`; byte limits continue to apply independently.
+- Roll back failed tus writes and discard uncommitted file tails before retrying.
+- Preserve byte ranges by skipping dynamic compression for partial responses.
+- Inherit ancestor HTTP method constraints when generating OpenAPI operations,
+  excluding routes whose method constraints conflict.
+- Exclude pending cookie jar changes and partial responses from response caching,
+  and bypass cached representations for range requests.
+- Forward parameter names through optional extractors and reject missing required
+  header, query and cookie values before constructing their wrappers.
+- Refresh query, payload, form and cookie caches after Tower request rewrites,
+  while preserving consumed-body caches and application cookie edits during pass-through.
+- Honor ETag precedence, lists and wildcards in conditional responses, while
+  preserving write responses and non-200 statuses.
+- Preserve response trailers during compression and offload compression flushing
+  and finalization together with expensive writes.
+- Validate tus creation requests before allocating storage, remove uploads after
+  creation-time stream failures, and pass final storage metadata to completion hooks.
+- Merge multipart form and file schemas instead of overwriting earlier endpoint
+  parameters, preserving required fields and form constraints.
+- Generate `Allow` for automatic 405 responses from complete built-in route matches,
+  without replaying custom callbacks or overriding middleware response policies.
+  When opaque filters prevent safely inferring any supported method, routing defaults
+  to 404; service middleware can provide its own 405 status and `Allow` header.
+- Reject malformed CSRF bcrypt proofs and costs that differ from the configured cost before
+  verification, require bcrypt 0.19.2 or newer, and omit CSRF cipher keys from debug output.
+- Honor explicit OIDC JWT algorithm allowlists and share a one-second JWKS refresh cooldown
+  across decoder clones, including failed refreshes and unknown key identifiers.
+- Preserve consecutive path filters on the same router when generating OpenAPI paths.
+- Honor `If-Range` validators in file responses, returning the full representation
+  when a resumable download refers to a different version.
+- Enforce strong `If-Match` preconditions for embedded assets before cache and range handling.
+- Restore path cursors, captured parameters and matched path templates after failed
+  composite filters, so alternative routes start from the original matching state.
+  Routing tests also compile when `matched-path` is disabled.
+- Omit query strings from core warnings about empty successful responses.
+- Enable only the requested `salvo_extra` middleware features through `salvo`,
+  avoiding unrelated WebSocket, Tower and request-ID dependencies for logging-only builds.
+- Declare the Hyper dependency directly for standalone `tower-compat` builds.
+- Recover request, depot and flow state when Tower layers short-circuit, fail or
+  cancel their inner future, preserving HEAD handling and prepared response policy headers.
+- Invoke tus upload completion hooks when PATCH finishes an upload, sharing
+  response customization and error handling with creation-time completion.
+- Preserve existing tus metadata if replacing its temporary file fails on Windows.
+- Keep graceful server shutdown responsive to force-stop commands and release active
+  connection accounting when a connection task panics or is cancelled.
+- Complete the Tokio and futures `AsyncWrite` shutdown operations on channel-backed
+  response bodies without requiring the sender to be dropped.
+- Retain in-memory rate-limit guards until their reset time when idle expiration
+  would otherwise discard an active quota. Capacity eviction and restarts remain
+  best-effort limits of the in-memory store.
+- Honor `Logger::log_status_error(false)` when recording response error details,
+  and align `Logger::default()` with `Logger::new()`.
+- Log finalized response statuses after Service media checks and catchers while retaining error diagnostics.
+
+## [1.0.1] - 2026-10-05
+
+### Fixed
+
+- A QUIC connection was dropped when a joined listener, such as the TCP side of a combined
+  HTTP/1.1, HTTP/2 and HTTP/3 server, accepted a connection during its handshake. A client that
+  never finished its handshake also stalled all new QUIC connections for up to
+  `tls_handshake_timeout`.
+- Honor the `http1` and `http2` feature flags when enabling Hyper protocols. HTTP/1-only
+  builds, including WebSocket support, no longer compile `h2` unless another dependency
+  enables HTTP/2. Default protocol support is unchanged.
+- Align the OpenTelemetry examples with the 0.33 dependencies used by `salvo-otel`.
+
 ## [1.0.0] - 2026-09-24
 
 ### Security

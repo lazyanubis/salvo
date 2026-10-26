@@ -218,7 +218,7 @@ impl OpenApi {
     /// # Documentation UI support
     ///
     /// All four bundled UIs load a 3.2 document, but their support for the new `query`
-    /// operation differs. As of Swagger UI v5.32.11 (vendored in this crate) `query` operations
+    /// operation differs. As of Swagger UI v5.34.0 (vendored in this crate) `query` operations
     /// render correctly; Scalar, RapiDoc and ReDoc — which load from a CDN at runtime — display
     /// the rest of the document but omit `query` operations.
     ///
@@ -1449,6 +1449,25 @@ mod tests {
         assert!(!doc.paths.contains_key("/posts/{id:num}"));
     }
 
+    #[tokio::test]
+    async fn repeated_path_filters_match_the_documented_path() {
+        use salvo_core::test::TestClient;
+
+        #[salvo_oapi::endpoint]
+        async fn get_version() -> &'static str {
+            "ok"
+        }
+
+        let router = Router::new().path("api").path("v1").get(get_version);
+        let doc = OpenApi::new("test api", "0.0.1").merge_router(&router);
+        let response = TestClient::get("http://localhost/api/v1")
+            .send(router)
+            .await;
+        assert_eq!(response.status_code, Some(salvo_core::http::StatusCode::OK));
+        assert!(doc.paths.contains_key("/api/v1"));
+        assert!(!doc.paths.contains_key("/v1"));
+    }
+
     #[test]
     fn to_parameters_struct_defaults_to_query_with_required() {
         // Regression test for https://github.com/salvo-rs/salvo/issues/1609
@@ -1577,6 +1596,111 @@ mod tests {
              got: {:?}",
             doc.paths.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[tokio::test]
+    async fn merge_router_inherits_ancestor_method_through_path_nodes() {
+        use salvo_core::routing::filters;
+        use salvo_core::test::TestClient;
+
+        #[salvo_oapi::endpoint]
+        async fn inherited() -> &'static str {
+            "ok"
+        }
+
+        let router = Router::with_path("/api")
+            .filter(filters::get())
+            .push(Router::with_path("v1").push(Router::with_path("items").goal(inherited)));
+        let doc = OpenApi::new("test api", "0.0.1").merge_router(&router);
+        let item = &doc.paths["/api/v1/items"];
+        assert_eq!(item.operations.len(), 1);
+        assert!(item.operations.contains_key(&PathItemType::Get));
+        assert!(item.additional_operations.is_empty());
+        let response = TestClient::get("http://localhost/api/v1/items")
+            .send(router)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+    }
+
+    #[test]
+    fn merge_router_intersects_method_constraints_instead_of_overriding_them() {
+        use salvo_core::http::Method;
+        use salvo_core::routing::filters::MethodFilter;
+
+        #[salvo_oapi::endpoint]
+        async fn endpoint() -> &'static str {
+            "ok"
+        }
+
+        let purge = Method::from_bytes(b"PURGE").unwrap();
+        for (first, second) in [
+            (Method::GET, Method::POST),
+            (Method::POST, Method::GET),
+            (Method::GET, purge.clone()),
+            (purge.clone(), Method::GET),
+        ] {
+            let same_node = Router::with_path("/conflict")
+                .filter(MethodFilter(first.clone()))
+                .filter(MethodFilter(second.clone()))
+                .goal(endpoint)
+                .push(Router::with_path("child").get(endpoint));
+            let parent_and_child = Router::with_path("/conflict")
+                .filter(MethodFilter(first))
+                .push(
+                    Router::new()
+                        .filter(MethodFilter(second))
+                        .goal(endpoint)
+                        .push(Router::with_path("child").get(endpoint)),
+                );
+            for conflict in [same_node, parent_and_child] {
+                let router = Router::new()
+                    .push(conflict)
+                    .push(Router::with_path("/valid").get(endpoint));
+                let doc = OpenApi::new("test api", "0.0.1")
+                    .openapi_version(OpenApiVersion::Version3_2)
+                    .merge_router(&router);
+                assert_eq!(doc.paths.len(), 1);
+                assert!(doc.paths.contains_key("/valid"));
+            }
+        }
+
+        let repeated = Router::with_path("/repeated")
+            .filter(MethodFilter(Method::GET))
+            .filter(MethodFilter(Method::GET))
+            .push(Router::new().get(endpoint));
+        let doc = OpenApi::new("test api", "0.0.1").merge_router(&repeated);
+        assert!(
+            doc.paths["/repeated"]
+                .operations
+                .contains_key(&PathItemType::Get)
+        );
+    }
+
+    #[test]
+    fn merge_router_inherited_extension_methods_keep_version_gating() {
+        use salvo_core::http::Method;
+        use salvo_core::routing::filters::MethodFilter;
+
+        #[salvo_oapi::endpoint]
+        async fn endpoint() -> &'static str {
+            "ok"
+        }
+
+        for method in [Method::QUERY, Method::from_bytes(b"PURGE").unwrap()] {
+            let router = Router::with_filter(MethodFilter(method.clone()))
+                .push(Router::with_path("/resource").goal(endpoint));
+            let doc = OpenApi::new("test api", "0.0.1").merge_router(&router);
+            assert!(doc.paths.is_empty());
+            let doc = OpenApi::new("test api", "0.0.1")
+                .openapi_version(OpenApiVersion::Version3_2)
+                .merge_router(&router);
+            let item = &doc.paths["/resource"];
+            if method == Method::QUERY {
+                assert!(item.operations.contains_key(&PathItemType::Query));
+            } else {
+                assert!(item.additional_operations.contains_key("PURGE"));
+            }
+        }
     }
 
     #[test]

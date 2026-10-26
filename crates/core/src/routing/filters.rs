@@ -68,7 +68,27 @@ pub trait Filter: Debug + Send + Sync + 'static {
     fn info(&self) -> FilterInfo {
         FilterInfo::Other(self.type_name())
     }
+
+    #[doc(hidden)]
+    fn collect_methods(&self, _methods: &mut Vec<Method>) {}
+
+    /// Probe a built-in filter with a hypothetical method without changing the
+    /// request. `None` means opaque, not a failed match: an `or` must not fall
+    /// through an unknown first branch. Probing must never replay arbitrary
+    /// callbacks or authorization checks.
+    #[doc(hidden)]
+    async fn filter_for_method(
+        &self,
+        _req: &mut Request,
+        _state: &mut PathState<'_>,
+        _method: &Method,
+    ) -> Option<bool> {
+        None
+    }
     /// Create a new filter use `And` filter.
+    ///
+    /// Restores path matching state if either filter fails. Mutations to the
+    /// request itself are not rolled back.
     #[inline]
     fn and<F>(self, other: F) -> And<Self, F>
     where
@@ -82,6 +102,9 @@ pub trait Filter: Debug + Send + Sync + 'static {
     }
 
     /// Create a new filter use `Or` filter.
+    ///
+    /// Restores path matching state before trying the second alternative and
+    /// when neither alternative matches. Request mutations are not rolled back.
     #[inline]
     fn or<F>(self, other: F) -> Or<Self, F>
     where
@@ -95,6 +118,8 @@ pub trait Filter: Debug + Send + Sync + 'static {
     }
 
     /// Create a new filter use `AndThen` filter.
+    ///
+    /// Restores path matching state if the filter or callback fails.
     #[inline]
     fn and_then<F>(self, fun: F) -> AndThen<Self, F>
     where
@@ -108,6 +133,9 @@ pub trait Filter: Debug + Send + Sync + 'static {
     }
 
     /// Create a new filter use `OrElse` filter.
+    ///
+    /// The callback starts with the original path matching state after a failed
+    /// filter. A failed callback also restores that state.
     #[inline]
     fn or_else<F>(self, fun: F) -> OrElse<Self, F>
     where

@@ -2148,7 +2148,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "salvo-cache"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bytes",
  "ciborium",
@@ -2164,7 +2164,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-cors"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bytes",
  "salvo_core",
@@ -2173,7 +2173,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-csrf"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -2196,7 +2196,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-flash"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "getrandom 0.4.3",
  "salvo-session",
@@ -2208,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-oapi"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2241,7 +2241,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-oapi-macros"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2253,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-proxy"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bytes",
  "fastrand",
@@ -2270,7 +2270,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-rate-limiter"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ciborium",
  "salvo_core",
@@ -2283,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-serde-util"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2292,7 +2292,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-session"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "cookie",
  "getrandom 0.2.17",
@@ -2306,7 +2306,7 @@ dependencies = [
 
 [[package]]
 name = "salvo-worker"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bytes",
  "futures",
@@ -2335,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "salvo_core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2383,7 +2383,7 @@ dependencies = [
 
 [[package]]
 name = "salvo_extra"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64 0.23.1",
  "etag",
@@ -2398,7 +2398,7 @@ dependencies = [
 
 [[package]]
 name = "salvo_macros"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

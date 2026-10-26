@@ -93,6 +93,8 @@ pub struct SseEvent {
 
 impl SseEvent {
     /// Sets Server-sent event data.
+    ///
+    /// CR, LF, and CRLF line endings are normalized to LF in the event data.
     #[inline]
     #[must_use]
     pub fn text<T: Into<String>>(mut self, data: T) -> Self {
@@ -107,7 +109,9 @@ impl SseEvent {
         Ok(self)
     }
 
-    /// Sets Server-sent event comment.`
+    /// Sets Server-sent event comment.
+    ///
+    /// Each line is emitted as a comment, including lines separated by CR or CRLF.
     #[inline]
     #[must_use]
     pub fn comment<T: Into<String>>(mut self, comment: T) -> Self {
@@ -116,10 +120,16 @@ impl SseEvent {
     }
 
     /// Sets Server-sent event event.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the event name contains CR or LF.
     #[inline]
     #[must_use]
     pub fn name<T: Into<String>>(mut self, event: T) -> Self {
-        self.name = Some(event.into());
+        let event = event.into();
+        assert!(!event.contains(['\r', '\n']), "SSE event names cannot contain CR or LF");
+        self.name = Some(event);
         self
     }
 
@@ -132,20 +142,35 @@ impl SseEvent {
     }
 
     /// Sets Server-sent event id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ID contains CR, LF, or NUL.
     #[inline]
     #[must_use]
     pub fn id<T: Into<String>>(mut self, id: T) -> Self {
-        self.id = Some(id.into());
+        let id = id.into();
+        assert!(!id.contains(['\r', '\n', '\0']), "SSE event IDs cannot contain CR, LF, or NUL");
+        self.id = Some(id);
         self
     }
+}
+
+// SSE recognizes CR, LF, and CRLF as line endings. Prefix every logical line,
+// including a trailing empty line, so field contents cannot change the framing.
+fn write_event_lines(f: &mut Formatter<'_>, prefix: &str, mut value: &str) -> fmt::Result {
+    while let Some(index) = value.find(['\r', '\n']) {
+        writeln!(f, "{prefix}{}", &value[..index])?;
+        let ending_len = if value[index..].starts_with("\r\n") { 2 } else { 1 };
+        value = &value[index + ending_len..];
+    }
+    writeln!(f, "{prefix}{value}")
 }
 
 impl Display for SseEvent {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         if let Some(comment) = &self.comment {
-            ":".fmt(f)?;
-            comment.fmt(f)?;
-            f.write_char('\n')?;
+            write_event_lines(f, ":", comment)?;
         }
 
         if let Some(name) = &self.name {
@@ -155,17 +180,9 @@ impl Display for SseEvent {
         }
 
         match &self.data {
-            Some(DataType::Text(data)) => {
-                for line in data.split('\n') {
-                    "data:".fmt(f)?;
-                    line.fmt(f)?;
-                    f.write_char('\n')?;
-                }
-            }
-            Some(DataType::Json(data)) => {
-                "data:".fmt(f)?;
-                data.fmt(f)?;
-                f.write_char('\n')?;
+            Some(DataType::Text(data) | DataType::Json(data)) => {
+                // RawValue can retain literal line endings even in compact JSON.
+                write_event_lines(f, "data:", data)?;
             }
             None => {}
         }
@@ -245,6 +262,7 @@ where
     #[must_use]
     pub fn max_interval(mut self, time: Duration) -> Self {
         self.max_interval = time;
+        self.alive_timer = time::sleep(time);
         self
     }
 
@@ -338,6 +356,52 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn raw_json_preserves_event_framing() {
+        for ending in ["\n", "\r", "\r\n"] {
+            let json = format!("{{{ending}{ending}\"value\":\"雪\"{ending}}}");
+            let raw: &serde_json::value::RawValue = serde_json::from_str(&json).unwrap();
+            // RawValue retains whitespace even through the compact serializer,
+            // both as the whole value and when nested in another JSON value.
+            let event = SseEvent::default().json(&raw).unwrap().to_string();
+            assert_eq!(event, "data:{\ndata:\ndata:\"value\":\"雪\"\ndata:}\n\n");
+            let event = SseEvent::default().json(&[raw]).unwrap().to_string();
+            assert_eq!(event, "data:[{\ndata:\ndata:\"value\":\"雪\"\ndata:}]\n\n");
+        }
+    }
+
+    #[test]
+    fn text_and_comments_preserve_all_line_endings() {
+        for ending in ["\n", "\r", "\r\n"] {
+            let text = format!("hello{ending}{ending}event:admin{ending}data:injected{ending}");
+            assert_eq!(
+                SseEvent::default().text(&text).to_string(),
+                "data:hello\ndata:\ndata:event:admin\ndata:data:injected\ndata:\n\n"
+            );
+            assert_eq!(
+                SseEvent::default().comment(&text).to_string(),
+                ":hello\n:\n:event:admin\n:data:injected\n:\n\n"
+            );
+        }
+        assert_eq!(
+            SseEvent::default().text("雪\r\n雨\r風\n").to_string(),
+            "data:雪\ndata:雨\ndata:風\ndata:\n\n"
+        );
+        assert_eq!(SseEvent::default().text("").to_string(), "data:\n\n");
+        assert_eq!(SseEvent::default().comment("").to_string(), ":\n\n");
+    }
+
+    #[test]
+    fn single_line_fields_reject_control_characters() {
+        for ending in ["\n", "\r", "\r\n"] {
+            let value = format!("safe{ending}data:injected");
+            assert!(std::panic::catch_unwind(|| SseEvent::default().name(&value)).is_err());
+            assert!(std::panic::catch_unwind(|| SseEvent::default().id(&value)).is_err());
+        }
+        assert!(std::panic::catch_unwind(|| SseEvent::default().id("ignored\0id")).is_err());
+        assert_eq!(SseEvent::default().id("").to_string(), "id:\n\n");
+    }
+
     #[tokio::test]
     async fn test_sse_data() {
         let event_stream = tokio_stream::iter(vec![
@@ -361,6 +425,34 @@ mod tests {
             .stream(&mut res);
         let text = res.take_string().await.unwrap();
         assert!(text.contains("data:1"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn keep_alive_uses_configured_interval_from_first_heartbeat() {
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+
+        for interval in [Duration::from_secs(1), Duration::from_secs(30)] {
+            let event_stream = futures_util::stream::pending::<Result<SseEvent, Infallible>>();
+            let keep_alive = SseKeepAlive::new(event_stream).max_interval(interval);
+            tokio::pin!(keep_alive);
+
+            assert!(keep_alive.as_mut().poll_next(&mut cx).is_pending());
+            time::advance(interval - Duration::from_millis(1)).await;
+            assert!(keep_alive.as_mut().poll_next(&mut cx).is_pending());
+            time::advance(Duration::from_millis(1)).await;
+            let Poll::Ready(Some(Ok(event))) = keep_alive.as_mut().poll_next(&mut cx) else {
+                panic!("first heartbeat must use the configured interval");
+            };
+            assert_eq!(event.to_string(), ":\n\n");
+
+            time::advance(interval - Duration::from_millis(1)).await;
+            assert!(keep_alive.as_mut().poll_next(&mut cx).is_pending());
+            time::advance(Duration::from_millis(1)).await;
+            assert!(matches!(
+                keep_alive.as_mut().poll_next(&mut cx),
+                Poll::Ready(Some(Ok(_)))
+            ));
+        }
     }
 
     #[tokio::test]
