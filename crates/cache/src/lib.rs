@@ -637,7 +637,10 @@ where
     let headers_before = res.headers().clone();
     ctrl.call_next(req, depot, res).await;
     let cached_data = cached_response(res, &headers_before, cache_private)?;
-    if let Err(e) = store.save_entry_with_depot(depot, key, cached_data.clone()).await {
+    if let Err(e) = store
+        .save_entry_with_depot(depot, key, cached_data.clone())
+        .await
+    {
         tracing::error!(error = ?e, "cache failed");
     }
     Some(cached_data)

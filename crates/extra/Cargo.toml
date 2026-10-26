@@ -25,14 +25,14 @@ full = [
     "catch-panic",
     "force-https",
     "logging",
-    # "sse", # ! tokio/time
+    "sse",
     "concurrency-limiter",
     "size-limiter",
     "trailing-slash",
     "timeout",
-    # "websocket", # ! hyper
+    "websocket",
     "request-id",
-    # "tower-compat", # ! hyper
+    "tower-compat",
 ]
 affix-state = []
 basic-auth = ["dep:base64"]

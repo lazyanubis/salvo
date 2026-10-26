@@ -425,7 +425,13 @@ impl HyperHandler {
             {
                 if let Some(catcher) = &state.catcher {
                     catcher
-                        .catch(&mut req, &mut depot, &mut res, #[cfg(not(target_family = "wasm"))] /* unsupported tokio functions */ conn_ctrl)
+                        .catch(
+                            &mut req,
+                            &mut depot,
+                            &mut res,
+                            #[cfg(not(target_family = "wasm"))] /* unsupported tokio functions */
+                            conn_ctrl,
+                        )
                         .await;
                 } else {
                     write_error_default(&req, &mut res, None);

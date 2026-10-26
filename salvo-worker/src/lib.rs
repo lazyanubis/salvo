@@ -1,4 +1,10 @@
-#![doc = include_str!("../../README.md")]
+//! Salvo 的 Cloudflare Worker 适配层。
+//!
+//! 把 Worker 的 request/response 桥接到 Salvo，并提供 Worker 专用的中间件与存储实现。
+//!
+//! 根 README 的示例是 Salvo 官方的 host 用法（依赖 salvo / tokio / acme），
+//! 不适用于本 crate，因此只在生成文档时引入，不参与 doctest 收集。
+#![cfg_attr(not(doctest), doc = include_str!("../../README.md"))]
 #![deny(unreachable_pub)] // ! lib 需要检查此项
 #![deny(unsafe_code)] // 拒绝 unsafe 代码
 #![deny(missing_docs)] // ! 必须写文档
