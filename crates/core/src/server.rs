@@ -305,8 +305,7 @@ impl<A: Acceptor + Send> Server<A> {
     cfg_feature! {
         #![feature = "http2"]
         /// Use this function to set http2 protocol.
-        pub fn http2_mut(&mut self) -> &mut http2::Builder<hyper_util::rt::TokioExecutor> {
-            // hidden on rust-analyzer
+        pub fn http2_mut(&mut self) -> &mut http2::Builder<crate::rt::tokio::TokioExecutor> {
             &mut self.builder.http2
         }
     }

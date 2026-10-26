@@ -131,7 +131,7 @@ impl WorkerService {
         let mut depot = salvo_core::Depot::new();
         depot.insert_typed(env);
         depot.insert_typed(ctx);
-        let response = self.service.handle(request, Some(depot)).await;
+        let response = self.service.handle_with_depot(request, Some(depot)).await;
 
         // parse response
         let response = crate::response::handle_response(response).await?;

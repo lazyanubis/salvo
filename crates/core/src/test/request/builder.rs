@@ -270,7 +270,7 @@ pub trait SendTarget {
 }
 impl SendTarget for &Service {
     async fn call(self, req: Request) -> Response {
-        self.handle(req, None).await
+        self.handle(req).await
     }
 }
 impl SendTarget for Router {
@@ -282,7 +282,7 @@ impl SendTarget for Router {
 impl SendTarget for Arc<Router> {
     async fn call(self, req: Request) -> Response {
         let srv = Service::new(self);
-        srv.handle(req, None).await
+        srv.handle(req).await
     }
 }
 impl<T> SendTarget for Arc<T>

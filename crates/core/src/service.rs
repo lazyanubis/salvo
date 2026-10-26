@@ -193,8 +193,18 @@ impl Service {
     /// Handle new request, this function only used for test.
     #[cfg(feature = "test")]
     #[inline]
-    #[rustfmt::skip]
-    pub async fn handle(&self, request: impl Into<Request> + Send, depot: Option<Depot>) -> Response {
+    pub async fn handle(&self, request: impl Into<Request> + Send) -> Response {
+        self.handle_with_depot(request, None).await
+    }
+
+    /// Same as [`Service::handle`], but lets the caller supply a [`Depot`].
+    #[cfg(feature = "test")]
+    #[inline]
+    pub async fn handle_with_depot(
+        &self,
+        request: impl Into<Request> + Send,
+        depot: Option<Depot>,
+    ) -> Response {
         let request = request.into();
         self.hyper_handler(
             request.local_addr.clone(),
@@ -206,7 +216,7 @@ impl Service {
             ConnCtrl::new(),
             None,
         )
-        .handle(request, depot)
+        .handle_with_depot(request, depot)
         .await
     }
 }
@@ -278,8 +288,16 @@ impl Debug for HyperHandler {
 }
 impl HyperHandler {
     /// Handle [`Request`] and returns [`Response`].
-    #[rustfmt::skip]
-    pub fn handle(&self, mut req: Request, depot: Option<Depot>) -> impl Future<Output = Response> + 'static {
+    pub fn handle(&self, req: Request) -> impl Future<Output = Response> + 'static {
+        self.handle_with_depot(req, None)
+    }
+
+    /// Same as [`HyperHandler::handle`], but lets the caller supply a [`Depot`].
+    pub fn handle_with_depot(
+        &self,
+        mut req: Request,
+        depot: Option<Depot>,
+    ) -> impl Future<Output = Response> + 'static {
         let state = self.state.clone();
         #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         let conn_ctrl = self.conn_ctrl.clone();
@@ -502,7 +520,7 @@ where
         let mut request = Request::from_hyper(req, scheme);
         #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         request.body.set_fuse_config(self.fuse_config);
-        let response = self.handle(request, None);
+        let response = self.handle(request);
         #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
         let conn_ctrl = self.conn_ctrl.clone();
         Box::pin(async move {

@@ -81,7 +81,16 @@ where
     type Key = K;
     type Guard = G;
 
-    async fn load_guard<Q>(
+    async fn load_guard<Q>(&self, _key: &Q, refer: &Self::Guard) -> Result<Self::Guard, Self::Error>
+    where
+        Self::Key: Borrow<Q>,
+        Q: Hash + Eq + Sync + AsRef<str>,
+    {
+        // KV 绑定只能从请求上下文取，无 depot 的调用无法工作
+        Ok(refer.clone())
+    }
+
+    async fn load_guard_with_depot<Q>(
         &self,
         depot: &Depot,
         key: &Q,
@@ -101,6 +110,19 @@ where
 
     async fn verify_guard(
         &self,
+        key: Self::Key,
+        refer: &Self::Guard,
+        _quota: &<Self::Guard as RateGuard>::Quota,
+    ) -> Result<RateLimitState<Self::Guard>, Self::Error> {
+        // KV 绑定只能从请求上下文取，无 depot 时不做限流
+        Ok(RateLimitState {
+            allowed: true,
+            guard: refer.clone(),
+        })
+    }
+
+    async fn verify_guard_with_depot(
+        &self,
         depot: &Depot,
         key: Self::Key,
         refer: &Self::Guard,
@@ -112,7 +134,12 @@ where
         Ok(RateLimitState { allowed, guard })
     }
 
-    async fn save_guard(
+    async fn save_guard(&self, _key: Self::Key, _guard: Self::Guard) -> Result<(), Self::Error> {
+        // KV 绑定只能从请求上下文取，无 depot 的调用无法工作
+        Ok(())
+    }
+
+    async fn save_guard_with_depot(
         &self,
         depot: &Depot,
         key: Self::Key,

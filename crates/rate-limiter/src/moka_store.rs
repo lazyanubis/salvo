@@ -10,7 +10,6 @@ use moka::future::Cache as MokaCache;
 use moka::ops::compute;
 
 use super::{RateGuard, RateLimitState, RateStore};
-use crate::Depot;
 
 const DEFAULT_MAX_CAPACITY: u64 = 100_000;
 const DEFAULT_TIME_TO_IDLE: Duration = Duration::from_secs(60 * 60);
@@ -130,7 +129,7 @@ where
 
 impl<K, G> RateStore for MokaStore<K, G>
 where
-    K: Hash + Eq + Send + Sync + Clone + 'static + AsRef<str>,
+    K: Hash + Eq + Send + Sync + Clone + 'static,
     G: RateGuard,
 {
     type Error = Infallible;
@@ -139,7 +138,6 @@ where
 
     async fn verify_guard(
         &self,
-        _depot: &Depot,
         key: Self::Key,
         refer: &Self::Guard,
         quota: &<Self::Guard as RateGuard>::Quota,
@@ -185,15 +183,10 @@ where
         })
     }
 
-    async fn load_guard<Q>(
-        &self,
-        _depot: &Depot,
-        key: &Q,
-        refer: &Self::Guard,
-    ) -> Result<Self::Guard, Self::Error>
+    async fn load_guard<Q>(&self, key: &Q, refer: &Self::Guard) -> Result<Self::Guard, Self::Error>
     where
         Self::Key: Borrow<Q>,
-        Q: Hash + Eq + Sync + AsRef<str>,
+        Q: Hash + Eq + Sync,
     {
         let guard = self.inner.get(key).await;
         if let Some(guard) = guard {
@@ -203,12 +196,7 @@ where
         }
     }
 
-    async fn save_guard(
-        &self,
-        _depot: &Depot,
-        key: Self::Key,
-        guard: Self::Guard,
-    ) -> Result<(), Self::Error> {
+    async fn save_guard(&self, key: Self::Key, guard: Self::Guard) -> Result<(), Self::Error> {
         // This low-level method has no quota from which to calculate reset;
         // quota enforcement should use verify_guard instead.
         self.inner
@@ -270,14 +258,14 @@ mod tests {
         let store = MokaStore::<String, CountingGuard>::unbounded();
         assert!(
             store
-                .verify_guard(&Depot::default(), "client".into(), &refer, &quota)
+                .verify_guard("client".into(), &refer, &quota)
                 .await
                 .unwrap()
                 .allowed
         );
         assert!(
             !store
-                .verify_guard(&Depot::default(), "client".into(), &refer, &quota)
+                .verify_guard("client".into(), &refer, &quota)
                 .await
                 .unwrap()
                 .allowed
@@ -295,14 +283,14 @@ mod tests {
         let refer = FixedGuard::new();
         assert!(
             store
-                .verify_guard(&Depot::default(), "client".into(), &refer, &quota)
+                .verify_guard("client".into(), &refer, &quota)
                 .await
                 .unwrap()
                 .allowed
         );
         assert!(
             !store
-                .verify_guard(&Depot::default(), "client".into(), &refer, &quota)
+                .verify_guard("client".into(), &refer, &quota)
                 .await
                 .unwrap()
                 .allowed
@@ -310,7 +298,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(
             !store
-                .verify_guard(&Depot::default(), "client".into(), &refer, &quota)
+                .verify_guard("client".into(), &refer, &quota)
                 .await
                 .unwrap()
                 .allowed
@@ -334,7 +322,7 @@ mod tests {
             let key = key.clone();
 
             handles.push(tokio::spawn(async move {
-                let state = store.verify_guard(&Depot::default(), key, &refer, &quota).await.unwrap();
+                let state = store.verify_guard(key, &refer, &quota).await.unwrap();
                 if state.allowed {
                     allowed_count.fetch_add(1, Ordering::SeqCst);
                 }

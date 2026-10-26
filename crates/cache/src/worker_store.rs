@@ -62,8 +62,17 @@ impl CacheStore for WorkerStore {
     type Error = worker::Error;
     type Key = String;
 
+    async fn load_entry<Q>(&self, _key: &Q) -> Option<CachedEntry>
+    where
+        Self::Key: Borrow<Q>,
+        Q: Hash + Eq + Sync + AsRef<str>,
+    {
+        // KV 绑定只能从请求上下文取，无 depot 的调用无法工作
+        None
+    }
+
     #[worker::send]
-    async fn load_entry<Q>(&self, depot: &Depot, key: &Q) -> Option<CachedEntry>
+    async fn load_entry_with_depot<Q>(&self, depot: &Depot, key: &Q) -> Option<CachedEntry>
     where
         Self::Key: Borrow<Q>,
         Q: Hash + Eq + Sync + AsRef<str>,
@@ -81,8 +90,13 @@ impl CacheStore for WorkerStore {
         Some(entry)
     }
 
+    async fn save_entry(&self, _key: Self::Key, _entry: CachedEntry) -> Result<(), Self::Error> {
+        // KV 绑定只能从请求上下文取，无 depot 的调用无法工作
+        Ok(())
+    }
+
     #[worker::send]
-    async fn save_entry(
+    async fn save_entry_with_depot(
         &self,
         depot: &Depot,
         key: Self::Key,

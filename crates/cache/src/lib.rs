@@ -262,18 +262,43 @@ pub trait CacheStore: Send + Sync + 'static {
     /// Key
     type Key: Hash + Eq + Send + Clone + 'static;
     /// Get the cache item from the store.
-    #[rustfmt::skip]
-    fn load_entry<Q>(&self, depot: &Depot, key: &Q) -> impl Future<Output = Option<CachedEntry>> + Send
+    fn load_entry<Q>(&self, key: &Q) -> impl Future<Output = Option<CachedEntry>> + Send
     where
         Self::Key: Borrow<Q>,
         Q: Hash + Eq + Sync + AsRef<str>;
+    /// Get the cache item from the store, with access to the request context.
+    ///
+    /// Stores that need per-request data (such as Worker KV bindings) override this;
+    /// the default forwards to [`CacheStore::load_entry`].
+    fn load_entry_with_depot<Q>(
+        &self,
+        _depot: &Depot,
+        key: &Q,
+    ) -> impl Future<Output = Option<CachedEntry>> + Send
+    where
+        Self::Key: Borrow<Q>,
+        Q: Hash + Eq + Sync + AsRef<str>,
+    {
+        self.load_entry(key)
+    }
     /// Save the cache item to the store.
     fn save_entry(
         &self,
-        depot: &Depot,
         key: Self::Key,
         data: CachedEntry,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    /// Save the cache item to the store, with access to the request context.
+    ///
+    /// Stores that need per-request data override this; the default forwards to
+    /// [`CacheStore::save_entry`].
+    fn save_entry_with_depot(
+        &self,
+        _depot: &Depot,
+        key: Self::Key,
+        data: CachedEntry,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.save_entry(key, data)
+    }
 }
 
 fn mutex_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -612,7 +637,7 @@ where
     let headers_before = res.headers().clone();
     ctrl.call_next(req, depot, res).await;
     let cached_data = cached_response(res, &headers_before, cache_private)?;
-    if let Err(e) = store.save_entry(depot, key, cached_data.clone()).await {
+    if let Err(e) = store.save_entry_with_depot(depot, key, cached_data.clone()).await {
         tracing::error!(error = ?e, "cache failed");
     }
     Some(cached_data)
@@ -759,7 +784,7 @@ where
             ctrl.call_next(req, depot, res).await;
             return;
         };
-        let Some(cache) = self.store.load_entry(depot, &key).await else {
+        let Some(cache) = self.store.load_entry_with_depot(depot, &key).await else {
             match self.in_flight.enter(key.clone()) {
                 FlightPermit::Leader(guard) => {
                     let cached_data = call_next_and_cache(

@@ -153,12 +153,12 @@ where
 
 impl<K> CacheStore for MokaStore<K>
 where
-    K: Hash + Eq + Send + Sync + Clone + 'static + AsRef<str>,
+    K: Hash + Eq + Send + Sync + Clone + 'static,
 {
     type Error = Infallible;
     type Key = K;
 
-    async fn load_entry<Q>(&self, _depot: &super::Depot, key: &Q) -> Option<CachedEntry>
+    async fn load_entry<Q>(&self, key: &Q) -> Option<CachedEntry>
     where
         Self::Key: Borrow<Q>,
         Q: Hash + Eq + Sync,
@@ -166,8 +166,7 @@ where
         self.inner.get(key).await
     }
 
-    #[rustfmt::skip]
-    async fn save_entry(&self, _depot: &super::Depot, key: Self::Key, entry: CachedEntry) -> Result<(), Self::Error> {
+    async fn save_entry(&self, key: Self::Key, entry: CachedEntry) -> Result<(), Self::Error> {
         self.inner.insert(key, entry).await;
         Ok(())
     }
@@ -182,7 +181,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_moka_store() {
-        let _depot = super::super::Depot::new();
         let store = MokaStore::new(100);
         let key = "test_key".to_owned();
         let entry = CachedEntry {
@@ -190,16 +188,14 @@ mod tests {
             headers: HeaderMap::new(),
             body: CachedBody::Once("test_body".into()),
         };
-        #[rustfmt::skip]
-        store.save_entry(&_depot, key.clone(), entry.clone()).await.unwrap();
-        let loaded_entry = store.load_entry(&_depot, &key).await.unwrap();
+        store.save_entry(key.clone(), entry.clone()).await.unwrap();
+        let loaded_entry = store.load_entry(&key).await.unwrap();
         assert_eq!(loaded_entry.status, entry.status);
         assert_eq!(loaded_entry.body, entry.body);
     }
 
     #[tokio::test]
     async fn test_moka_store_builder() {
-        let _depot = super::super::Depot::new();
         let store = MokaStore::<String>::builder()
             .initial_capacity(50)
             .max_capacity(100)
@@ -212,17 +208,16 @@ mod tests {
             headers: HeaderMap::new(),
             body: CachedBody::Once("test_body".into()),
         };
-        #[rustfmt::skip]
-        store.save_entry(&_depot, key.clone(), entry.clone()).await.unwrap();
-        let loaded_entry = store.load_entry(&_depot, &key).await.unwrap();
+        store.save_entry(key.clone(), entry.clone()).await.unwrap();
+        let loaded_entry = store.load_entry(&key).await.unwrap();
         assert_eq!(loaded_entry.status, entry.status);
         assert_eq!(loaded_entry.body, entry.body);
 
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let loaded_entry = store.load_entry(&_depot, &key).await;
+        let loaded_entry = store.load_entry(&key).await;
         assert!(loaded_entry.is_none());
     }
-
+    
     #[test]
     fn test_builder_debug() {
         let builder = MokaStore::<String>::builder();
@@ -236,10 +231,9 @@ mod tests {
         let dbg_str = format!("{store:?}");
         assert_eq!(dbg_str, "MokaStore");
     }
-
+    
     #[tokio::test]
     async fn test_eviction_listener() {
-        let _depot = super::super::Depot::new();
         use std::sync::atomic::{AtomicBool, Ordering};
         let evicted = Arc::new(AtomicBool::new(false));
         let evicted_clone = evicted.clone();
@@ -254,15 +248,13 @@ mod tests {
             headers: HeaderMap::new(),
             body: CachedBody::Once("test_body".into()),
         };
-        #[rustfmt::skip]
-        store.save_entry(&_depot, "key1".to_owned(), entry.clone()).await.unwrap();
-        #[rustfmt::skip]
-        store.save_entry(&_depot, "key2".to_owned(), entry.clone()).await.unwrap();
-
+        store.save_entry("key1".to_owned(), entry.clone()).await.unwrap();
+        store.save_entry("key2".to_owned(), entry.clone()).await.unwrap();
+        
         // Try to get the key to give time to the eviction listener to run.
         for _ in 0..10 {
-            store.load_entry(&_depot, &"key1".to_owned()).await;
-            store.load_entry(&_depot, &"key2".to_owned()).await;
+            store.load_entry(&"key1".to_owned()).await;
+            store.load_entry(&"key2".to_owned()).await;
             if evicted.load(Ordering::SeqCst) {
                 break;
             }
@@ -301,13 +293,12 @@ mod tests {
             headers: HeaderMap::new(),
             body: CachedBody::Once("test_body".into()), // 9 bytes
         };
-        let _depot = super::super::Depot::new();
-        store.save_entry(&_depot, "key1".to_owned(), entry.clone()).await.unwrap();
-        store.save_entry(&_depot, "key2".to_owned(), entry.clone()).await.unwrap();
+        store.save_entry("key1".to_owned(), entry.clone()).await.unwrap();
+        store.save_entry("key2".to_owned(), entry.clone()).await.unwrap();
 
         for _ in 0..10 {
-            store.load_entry(&_depot, &"key1".to_owned()).await;
-            store.load_entry(&_depot, &"key2".to_owned()).await;
+            store.load_entry(&"key1".to_owned()).await;
+            store.load_entry(&"key2".to_owned()).await;
             if evicted.load(Ordering::SeqCst) {
                 break;
             }

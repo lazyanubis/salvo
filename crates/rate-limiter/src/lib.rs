@@ -142,7 +142,7 @@ cfg_feature! {
 /// Issues a rate-limit key for a request, identifying the subject being limited.
 pub trait RateIssuer: Send + Sync + 'static {
     /// The key type that uniquely identifies a rate-limited subject (e.g. client IP, user id).
-    type Key: Hash + Eq + Send + Sync + 'static + AsRef<str>;
+    type Key: Hash + Eq + Send + Sync + 'static;
     /// Issue a key identifying the rate-limited subject for this request.
     ///
     /// Returning `None` means the subject could not be identified: the
@@ -159,7 +159,7 @@ pub trait RateIssuer: Send + Sync + 'static {
 impl<F, K> RateIssuer for F
 where
     F: Fn(&mut Request, &Depot) -> Option<K> + Send + Sync + 'static,
-    K: Hash + Eq + Send + Sync + 'static + AsRef<str>,
+    K: Hash + Eq + Send + Sync + 'static,
 {
     type Key = K;
     async fn issue(&self, req: &mut Request, depot: &Depot) -> Option<Self::Key> {
@@ -182,9 +182,9 @@ where
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RemoteIpIssuer;
 impl RateIssuer for RemoteIpIssuer {
-    type Key = String;
+    type Key = IpAddr;
     async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
-        req.remote_addr().ip().map(|ip| ip.to_string())
+        req.remote_addr().ip()
     }
 }
 
@@ -236,12 +236,10 @@ impl ForwardedHeaderIssuer {
 
 #[allow(deprecated)]
 impl RateIssuer for ForwardedHeaderIssuer {
-    type Key = String;
+    type Key = IpAddr;
 
     async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
-        extract_forwarded_ip(req)
-            .or_else(|| req.remote_addr().ip())
-            .map(|ip| ip.to_string())
+        extract_forwarded_ip(req).or_else(|| req.remote_addr().ip())
     }
 }
 
@@ -311,7 +309,7 @@ impl TrustedProxyIssuer {
 }
 
 impl RateIssuer for TrustedProxyIssuer {
-    type Key = String;
+    type Key = IpAddr;
 
     async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
         let remote_ip = req.remote_addr().ip();
@@ -320,9 +318,9 @@ impl RateIssuer for TrustedProxyIssuer {
             && let Some(forwarded) =
                 extract_client_ip_via_trusted_proxies(req, &self.trusted_proxies)
         {
-            return Some(forwarded.to_string());
+            return Some(forwarded);
         }
-        remote_ip.map(|ip| ip.to_string())
+        remote_ip
     }
 }
 
@@ -419,7 +417,7 @@ pub trait RateStore: Send + Sync + 'static {
     /// Error type for RateStore.
     type Error: StdError;
     /// Key
-    type Key: Hash + Eq + Send + Sync + Clone + 'static + AsRef<str>;
+    type Key: Hash + Eq + Send + Sync + Clone + 'static;
     /// Saved guard.
     type Guard: RateGuard;
 
@@ -430,11 +428,24 @@ pub trait RateStore: Send + Sync + 'static {
     /// domain for each key.
     fn verify_guard(
         &self,
-        depot: &Depot,
         key: Self::Key,
         refer: &Self::Guard,
         quota: &<Self::Guard as RateGuard>::Quota,
     ) -> impl Future<Output = Result<RateLimitState<Self::Guard>, Self::Error>> + Send;
+
+    /// Same as [`RateStore::verify_guard`], with access to the request context.
+    ///
+    /// Stores that need per-request data (such as Worker KV bindings) override this;
+    /// the default forwards to [`RateStore::verify_guard`].
+    fn verify_guard_with_depot(
+        &self,
+        _depot: &Depot,
+        key: Self::Key,
+        refer: &Self::Guard,
+        quota: &<Self::Guard as RateGuard>::Quota,
+    ) -> impl Future<Output = Result<RateLimitState<Self::Guard>, Self::Error>> + Send {
+        self.verify_guard(key, refer, quota)
+    }
 
     /// Get the guard from the store.
     ///
@@ -442,23 +453,43 @@ pub trait RateStore: Send + Sync + 'static {
     /// [`RateStore::verify_guard`] so verification and update can be atomic.
     fn load_guard<Q>(
         &self,
-        depot: &Depot,
         key: &Q,
         refer: &Self::Guard,
     ) -> impl Future<Output = Result<Self::Guard, Self::Error>> + Send
     where
         Self::Key: Borrow<Q>,
         Q: Hash + Eq + Sync + AsRef<str>;
+    /// Same as [`RateStore::load_guard`], with access to the request context.
+    fn load_guard_with_depot<Q>(
+        &self,
+        _depot: &Depot,
+        key: &Q,
+        refer: &Self::Guard,
+    ) -> impl Future<Output = Result<Self::Guard, Self::Error>> + Send
+    where
+        Self::Key: Borrow<Q>,
+        Q: Hash + Eq + Sync + AsRef<str>,
+    {
+        self.load_guard(key, refer)
+    }
     /// Save the guard from the store.
     ///
     /// This is a low-level operation. Quota enforcement should use
     /// [`RateStore::verify_guard`] so verification and update can be atomic.
     fn save_guard(
         &self,
-        depot: &Depot,
         key: Self::Key,
         guard: Self::Guard,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    /// Same as [`RateStore::save_guard`], with access to the request context.
+    fn save_guard_with_depot(
+        &self,
+        _depot: &Depot,
+        key: Self::Key,
+        guard: Self::Guard,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.save_guard(key, guard)
+    }
 }
 
 /// `RateLimiter` is the main struct to used limit user request.
@@ -554,7 +585,7 @@ where
             }
         };
         #[rustfmt::skip]
-        let state = match self.store.verify_guard(depot, key, &self.guard, &quota).await {
+        let state = match self.store.verify_guard_with_depot(depot, key, &self.guard, &quota).await {
             Ok(state) => state,
             Err(e) => {
                 tracing::error!(error = ?e, "rate limiter error: {}", e);
@@ -840,7 +871,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "203.0.113.10");
+        assert_eq!(ip, "203.0.113.10".parse::<IpAddr>().unwrap());
     }
 
     #[tokio::test]
@@ -850,7 +881,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "198.51.100.7");
+        assert_eq!(ip, "198.51.100.7".parse::<IpAddr>().unwrap());
     }
 
     #[tokio::test]
@@ -860,7 +891,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "10.0.0.5");
+        assert_eq!(ip, "10.0.0.5".parse::<IpAddr>().unwrap());
     }
 
     #[tokio::test]
@@ -870,7 +901,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "203.0.113.42");
+        assert_eq!(ip, "203.0.113.42".parse::<IpAddr>().unwrap());
     }
 
     #[tokio::test]
@@ -883,7 +914,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "198.51.100.7");
+        assert_eq!(ip, "198.51.100.7".parse::<IpAddr>().unwrap());
     }
 
     #[tokio::test]
@@ -898,7 +929,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "198.51.100.7");
+        assert_eq!(ip, "198.51.100.7".parse::<IpAddr>().unwrap());
     }
 
     #[test]

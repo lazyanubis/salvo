@@ -715,7 +715,7 @@ mod tests {
             (2, 0, crate::http::StatusCode::PAYLOAD_TOO_LARGE),
             (1, 1, crate::http::StatusCode::PAYLOAD_TOO_LARGE),
         ] {
-            let response = service.handle(multipart_request(parts, files), None).await;
+            let response = service.handle(multipart_request(parts, files)).await;
             assert_eq!(response.status_code, Some(status));
         }
     }

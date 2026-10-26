@@ -18,11 +18,9 @@ use mime::Mime;
 use crate::fs::NamedFile;
 #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
 use crate::fuse::TransProto;
-#[cfg(target_family = "wasm")] // ? unused on wasm32
-use crate::http::StatusCode;
 pub use crate::http::body::{BodySender, BytesFrame, ResBody};
-#[cfg(not(target_family = "wasm"))] // ? unused on wasm32
-use crate::http::{StatusCode, StatusError}; // ? unused on wasm32
+#[cfg_attr(target_family = "wasm", allow(unused_imports))] // StatusError 只在非 wasm 分支用到
+use crate::http::{StatusCode, StatusError};
 use crate::{BoxedError, Error, Scribe};
 
 /// Represents an HTTP response.
