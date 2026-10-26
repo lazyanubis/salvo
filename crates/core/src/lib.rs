@@ -33,7 +33,7 @@
 
 /// Re-export `async_trait`.
 pub use async_trait::async_trait;
-// pub use hyper;
+pub use hyper;
 pub use salvo_macros as macros;
 pub use salvo_macros::handler;
 // https://github.com/bkchr/proc-macro-crate/issues/10
@@ -58,7 +58,6 @@ pub mod handler;
 pub mod http;
 pub mod proto;
 pub mod routing;
-#[cfg(feature = "hidden-on-ra")]
 #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
 pub mod rt;
 #[doc(hidden)]
@@ -119,11 +118,10 @@ pub mod prelude {
         #![feature ="quinn"]
         pub use crate::conn::QuinnListener;
     }
-    // ? needless for wasm32
-    // cfg_feature! {
-    //     #![all(feature = "unix", unix)]
-    //     pub use crate::conn::UnixListener;
-    // }
+    cfg_feature! {
+        #![all(feature = "unix", unix)]
+        pub use crate::conn::UnixListener;
+    }
     #[cfg(not(target_family = "wasm"))] // ? unsupported tokio functions
     pub use crate::conn::{ConnCtrl, JoinedListener, Listener, TcpListener};
     pub use crate::handler::{self, Handler};

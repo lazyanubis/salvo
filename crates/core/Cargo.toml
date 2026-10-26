@@ -90,8 +90,8 @@ chardetng = { workspace = true }
 content_inspector = { workspace = true }
 cookie = { workspace = true, features = [
     "percent-encode",
-    # "private",
-    # "signed",
+    "private",
+    "signed",
 ], optional = true }
 encoding_rs = { workspace = true, optional = true }
 enumflags2 = { workspace = true }

@@ -23,11 +23,8 @@ saysion = { workspace = true }
 cookie = { workspace = true, features = ["percent-encode", "signed"] }
 salvo_core = { workspace = true, features = ["cookie"] }
 tracing = { workspace = true }
-
 getrandom_v2 = { workspace = true, features = ["js"] }
-getrandom = { workspace = true, features = [
-    "wasm_js",
-] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
+getrandom = { workspace = true, features = ["wasm_js"] } # ! build with -> RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
 time = { workspace = true }
 worker = { workspace = true }
 
@@ -37,13 +34,3 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
-
-[package.metadata.release]
-release = false
-
-# https://github.com/rustwasm/wasm-pack/issues/1247
-# [package.metadata.wasm-pack.profile.release]
-# wasm-opt = false
-
-# [lib]
-# crate-type = ["cdylib"]

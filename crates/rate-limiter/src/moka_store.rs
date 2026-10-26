@@ -10,6 +10,7 @@ use moka::future::Cache as MokaCache;
 use moka::ops::compute;
 
 use super::{RateGuard, RateLimitState, RateStore};
+use crate::Depot;
 
 const DEFAULT_MAX_CAPACITY: u64 = 100_000;
 const DEFAULT_TIME_TO_IDLE: Duration = Duration::from_secs(60 * 60);
@@ -129,7 +130,7 @@ where
 
 impl<K, G> RateStore for MokaStore<K, G>
 where
-    K: Hash + Eq + Send + Sync + Clone + 'static,
+    K: Hash + Eq + Send + Sync + Clone + 'static + AsRef<str>,
     G: RateGuard,
 {
     type Error = Infallible;
@@ -138,6 +139,7 @@ where
 
     async fn verify_guard(
         &self,
+        _depot: &Depot,
         key: Self::Key,
         refer: &Self::Guard,
         quota: &<Self::Guard as RateGuard>::Quota,
@@ -183,10 +185,15 @@ where
         })
     }
 
-    async fn load_guard<Q>(&self, key: &Q, refer: &Self::Guard) -> Result<Self::Guard, Self::Error>
+    async fn load_guard<Q>(
+        &self,
+        _depot: &Depot,
+        key: &Q,
+        refer: &Self::Guard,
+    ) -> Result<Self::Guard, Self::Error>
     where
         Self::Key: Borrow<Q>,
-        Q: Hash + Eq + Sync,
+        Q: Hash + Eq + Sync + AsRef<str>,
     {
         let guard = self.inner.get(key).await;
         if let Some(guard) = guard {
@@ -196,7 +203,12 @@ where
         }
     }
 
-    async fn save_guard(&self, key: Self::Key, guard: Self::Guard) -> Result<(), Self::Error> {
+    async fn save_guard(
+        &self,
+        _depot: &Depot,
+        key: Self::Key,
+        guard: Self::Guard,
+    ) -> Result<(), Self::Error> {
         // This low-level method has no quota from which to calculate reset;
         // quota enforcement should use verify_guard instead.
         self.inner

@@ -97,13 +97,12 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use std::borrow::Borrow;
-#[allow(unused)]
 use std::collections::HashSet;
 use std::error::Error as StdError;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
 
-// use std::net::IpAddr; // ? AsRef<str>
+use std::net::IpAddr;
 use salvo_core::handler::{Skipper, none_skipper};
 use salvo_core::http::{HeaderValue, Request, Response, StatusCode, StatusError};
 use salvo_core::{Depot, FlowCtrl, Handler, async_trait};
@@ -237,157 +236,159 @@ impl ForwardedHeaderIssuer {
     }
 }
 
-// #[allow(deprecated)]
-// impl RateIssuer for ForwardedHeaderIssuer {
-//     type Key = IpAddr;
+#[allow(deprecated)]
+impl RateIssuer for ForwardedHeaderIssuer {
+    type Key = String;
 
-//     async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
-//         extract_forwarded_ip(req).or_else(|| req.remote_addr().ip())
-//     }
-// }
+    async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
+        extract_forwarded_ip(req)
+            .or_else(|| req.remote_addr().ip())
+            .map(|ip| ip.to_string())
+    }
+}
 
-// /// Identify the client IP only when the request arrived from a trusted proxy.
-// ///
-// /// `TrustedProxyIssuer` is the proxy-aware counterpart to [`ForwardedHeaderIssuer`].
-// /// It consults `X-Forwarded-For` and `X-Real-IP` **only** when the direct
-// /// connection IP (`req.remote_addr()`) matches one of the trusted proxy
-// /// addresses supplied at construction time. For requests coming from any
-// /// other source it ignores those headers and returns the direct connection
-// /// IP, so a client that connects to the application directly cannot forge
-// /// `X-Forwarded-For` to bypass rate limiting.
-// ///
-// /// # When to use it
-// ///
-// /// - Your application is normally reachable only through a reverse proxy / load balancer (nginx,
-// ///   Cloudflare, ELB, etc.), and that proxy rewrites the forwarded headers.
-// /// - You cannot guarantee that **direct** connections to the application are impossible — for
-// ///   example a developer port-forward, a misrouted firewall rule, or a cloud security-group
-// ///   regression would briefly expose it. With [`ForwardedHeaderIssuer`] those direct connections
-// ///   would let any client spoof their source IP; with `TrustedProxyIssuer` the spoofed header is
-// ///   silently ignored.
-// ///
-// /// # Example
-// ///
-// /// ```ignore
-// /// use std::net::IpAddr;
-// /// use salvo_rate_limiter::{RateLimiter, TrustedProxyIssuer, BasicQuota, FixedGuard, MokaStore};
-// ///
-// /// let limiter = RateLimiter::new(
-// ///     FixedGuard::default(),
-// ///     MokaStore::default(),
-// ///     TrustedProxyIssuer::new([
-// ///         "10.0.0.5".parse::<IpAddr>().unwrap(),
-// ///         "10.0.0.6".parse::<IpAddr>().unwrap(),
-// ///     ]),
-// ///     BasicQuota::per_minute(100),
-// /// );
-// /// ```
-// #[derive(Debug, Clone, Default)]
-// pub struct TrustedProxyIssuer {
-//     trusted_proxies: HashSet<IpAddr>,
-// }
+/// Identify the client IP only when the request arrived from a trusted proxy.
+///
+/// `TrustedProxyIssuer` is the proxy-aware counterpart to [`ForwardedHeaderIssuer`].
+/// It consults `X-Forwarded-For` and `X-Real-IP` **only** when the direct
+/// connection IP (`req.remote_addr()`) matches one of the trusted proxy
+/// addresses supplied at construction time. For requests coming from any
+/// other source it ignores those headers and returns the direct connection
+/// IP, so a client that connects to the application directly cannot forge
+/// `X-Forwarded-For` to bypass rate limiting.
+///
+/// # When to use it
+///
+/// - Your application is normally reachable only through a reverse proxy / load balancer (nginx,
+///   Cloudflare, ELB, etc.), and that proxy rewrites the forwarded headers.
+/// - You cannot guarantee that **direct** connections to the application are impossible — for
+///   example a developer port-forward, a misrouted firewall rule, or a cloud security-group
+///   regression would briefly expose it. With [`ForwardedHeaderIssuer`] those direct connections
+///   would let any client spoof their source IP; with `TrustedProxyIssuer` the spoofed header is
+///   silently ignored.
+///
+/// # Example
+///
+/// ```ignore
+/// use std::net::IpAddr;
+/// use salvo_rate_limiter::{RateLimiter, TrustedProxyIssuer, BasicQuota, FixedGuard, MokaStore};
+///
+/// let limiter = RateLimiter::new(
+///     FixedGuard::default(),
+///     MokaStore::default(),
+///     TrustedProxyIssuer::new([
+///         "10.0.0.5".parse::<IpAddr>().unwrap(),
+///         "10.0.0.6".parse::<IpAddr>().unwrap(),
+///     ]),
+///     BasicQuota::per_minute(100),
+/// );
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct TrustedProxyIssuer {
+    trusted_proxies: HashSet<IpAddr>,
+}
 
-// impl TrustedProxyIssuer {
-//     /// Create a `TrustedProxyIssuer` that only honours forwarded headers
-//     /// for requests coming from one of the given proxy addresses.
-//     ///
-//     /// An empty proxy list makes the issuer behave like [`RemoteIpIssuer`] —
-//     /// no header is ever trusted.
-//     #[must_use]
-//     pub fn new<I, A>(trusted_proxies: I) -> Self
-//     where
-//         I: IntoIterator<Item = A>,
-//         A: Into<IpAddr>,
-//     {
-//         Self {
-//             trusted_proxies: trusted_proxies.into_iter().map(Into::into).collect(),
-//         }
-//     }
+impl TrustedProxyIssuer {
+    /// Create a `TrustedProxyIssuer` that only honours forwarded headers
+    /// for requests coming from one of the given proxy addresses.
+    ///
+    /// An empty proxy list makes the issuer behave like [`RemoteIpIssuer`] —
+    /// no header is ever trusted.
+    #[must_use]
+    pub fn new<I, A>(trusted_proxies: I) -> Self
+    where
+        I: IntoIterator<Item = A>,
+        A: Into<IpAddr>,
+    {
+        Self {
+            trusted_proxies: trusted_proxies.into_iter().map(Into::into).collect(),
+        }
+    }
 
-//     /// Returns true if the given IP is one of the configured proxies.
-//     #[must_use]
-//     pub fn is_trusted(&self, addr: &IpAddr) -> bool {
-//         self.trusted_proxies.contains(addr)
-//     }
-// }
+    /// Returns true if the given IP is one of the configured proxies.
+    #[must_use]
+    pub fn is_trusted(&self, addr: &IpAddr) -> bool {
+        self.trusted_proxies.contains(addr)
+    }
+}
 
-// impl RateIssuer for TrustedProxyIssuer {
-//     type Key = IpAddr;
+impl RateIssuer for TrustedProxyIssuer {
+    type Key = String;
 
-//     async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
-//         let remote_ip = req.remote_addr().ip();
-//         if let Some(remote_ip) = remote_ip
-//             && self.trusted_proxies.contains(&remote_ip)
-//             && let Some(forwarded) =
-//                 extract_client_ip_via_trusted_proxies(req, &self.trusted_proxies)
-//         {
-//             return Some(forwarded);
-//         }
-//         remote_ip
-//     }
-// }
+    async fn issue(&self, req: &mut Request, _depot: &Depot) -> Option<Self::Key> {
+        let remote_ip = req.remote_addr().ip();
+        if let Some(remote_ip) = remote_ip
+            && self.trusted_proxies.contains(&remote_ip)
+            && let Some(forwarded) =
+                extract_client_ip_via_trusted_proxies(req, &self.trusted_proxies)
+        {
+            return Some(forwarded.to_string());
+        }
+        remote_ip.map(|ip| ip.to_string())
+    }
+}
 
-// /// Determine the real client IP for a request that arrived through a trusted proxy.
-// ///
-// /// `X-Forwarded-For` is appended left-to-right (`client, proxy1, proxy2`), so the
-// /// untrusted client address is found by scanning **right-to-left** and returning the
-// /// first entry that is not itself a trusted proxy. Taking the leftmost value (as the
-// /// legacy [`ForwardedHeaderIssuer`] does) would let a client spoof its address by
-// /// pre-populating the header before it reaches the trusted proxy.
-// fn extract_client_ip_via_trusted_proxies(
-//     req: &Request,
-//     trusted: &HashSet<IpAddr>,
-// ) -> Option<IpAddr> {
-//     if let Some(xff) = req.headers().get("x-forwarded-for")
-//         && let Ok(xff_str) = xff.to_str()
-//     {
-//         for part in xff_str.rsplit(',') {
-//             if let Ok(ip) = part.trim().parse::<IpAddr>()
-//                 && !trusted.contains(&ip)
-//             {
-//                 return Some(ip);
-//             }
-//         }
-//     }
+/// Determine the real client IP for a request that arrived through a trusted proxy.
+///
+/// `X-Forwarded-For` is appended left-to-right (`client, proxy1, proxy2`), so the
+/// untrusted client address is found by scanning **right-to-left** and returning the
+/// first entry that is not itself a trusted proxy. Taking the leftmost value (as the
+/// legacy [`ForwardedHeaderIssuer`] does) would let a client spoof its address by
+/// pre-populating the header before it reaches the trusted proxy.
+fn extract_client_ip_via_trusted_proxies(
+    req: &Request,
+    trusted: &HashSet<IpAddr>,
+) -> Option<IpAddr> {
+    if let Some(xff) = req.headers().get("x-forwarded-for")
+        && let Ok(xff_str) = xff.to_str()
+    {
+        for part in xff_str.rsplit(',') {
+            if let Ok(ip) = part.trim().parse::<IpAddr>()
+                && !trusted.contains(&ip)
+            {
+                return Some(ip);
+            }
+        }
+    }
 
-//     // No usable forwarded address; fall back to `X-Real-IP` set by the trusted proxy.
-//     if let Some(real_ip) = req.headers().get("x-real-ip")
-//         && let Ok(real_ip_str) = real_ip.to_str()
-//         && let Ok(ip) = real_ip_str.trim().parse::<IpAddr>()
-//     {
-//         return Some(ip);
-//     }
+    // No usable forwarded address; fall back to `X-Real-IP` set by the trusted proxy.
+    if let Some(real_ip) = req.headers().get("x-real-ip")
+        && let Ok(real_ip_str) = real_ip.to_str()
+        && let Ok(ip) = real_ip_str.trim().parse::<IpAddr>()
+    {
+        return Some(ip);
+    }
 
-//     None
-// }
+    None
+}
 
-// /// Parse the first usable IP out of `X-Forwarded-For` / `X-Real-IP`.
-// ///
-// /// Returns `None` if neither header is present or parseable.
-// fn extract_forwarded_ip(req: &Request) -> Option<IpAddr> {
-//     // Try X-Forwarded-For header first (common with most reverse proxies)
-//     if let Some(xff) = req.headers().get("x-forwarded-for")
-//         && let Ok(xff_str) = xff.to_str()
-//     {
-//         // X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
-//         // The first one is the original client IP
-//         if let Some(first_ip) = xff_str.split(',').next()
-//             && let Ok(ip) = first_ip.trim().parse::<IpAddr>()
-//         {
-//             return Some(ip);
-//         }
-//     }
+/// Parse the first usable IP out of `X-Forwarded-For` / `X-Real-IP`.
+///
+/// Returns `None` if neither header is present or parseable.
+fn extract_forwarded_ip(req: &Request) -> Option<IpAddr> {
+    // Try X-Forwarded-For header first (common with most reverse proxies)
+    if let Some(xff) = req.headers().get("x-forwarded-for")
+        && let Ok(xff_str) = xff.to_str()
+    {
+        // X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
+        // The first one is the original client IP
+        if let Some(first_ip) = xff_str.split(',').next()
+            && let Ok(ip) = first_ip.trim().parse::<IpAddr>()
+        {
+            return Some(ip);
+        }
+    }
 
-//     // Try X-Real-IP header (used by nginx)
-//     if let Some(real_ip) = req.headers().get("x-real-ip")
-//         && let Ok(real_ip_str) = real_ip.to_str()
-//         && let Ok(ip) = real_ip_str.trim().parse::<IpAddr>()
-//     {
-//         return Some(ip);
-//     }
+    // Try X-Real-IP header (used by nginx)
+    if let Some(real_ip) = req.headers().get("x-real-ip")
+        && let Ok(real_ip_str) = real_ip.to_str()
+        && let Ok(ip) = real_ip_str.trim().parse::<IpAddr>()
+    {
+        return Some(ip);
+    }
 
-//     None
-// }
+    None
+}
 
 /// `RateGuard` is strategy to verify is the request exceeded quota
 pub trait RateGuard: Clone + Send + Sync + 'static {

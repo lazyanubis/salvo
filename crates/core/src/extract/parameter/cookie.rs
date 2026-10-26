@@ -31,10 +31,11 @@ where
             .next()
             .is_some_and(|c| c.is_ascii_digit() || matches!(c, '-' | 't' | 'f' | 'n'));
 
-    if looks_like_json
-        && let Ok(v) = serde_json::from_str::<T>(value) {
+    if looks_like_json {
+        if let Ok(v) = serde_json::from_str::<T>(value) {
             return Some(v);
         }
+    }
 
     // Fall back to scalar string deserialization.
     from_str_val(value).ok()

@@ -41,9 +41,11 @@ impl Default for ReqwestClient {
     fn default() -> Self {
         #[cfg(feature = "ring")]
         let _ = rustls::crypto::ring::default_provider().install_default();
+        let builder = InnerClient::builder();
+        #[cfg(not(target_family = "wasm"))]
+        let builder = builder.redirect(reqwest::redirect::Policy::none());
         Self::new(
-            InnerClient::builder()
-                // .redirect(reqwest::redirect::Policy::none()) // ! can not compile
+            builder
                 .build()
                 .expect("failed to build reqwest client"),
         )
