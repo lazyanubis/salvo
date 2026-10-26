@@ -436,7 +436,7 @@ mod tests {
     fn test_serve_index_escapes_config_for_script_context() {
         // A url containing `</script>` must not be able to break out of the inline script.
         let config = Config::new(["</script><script>alert(1)</script>"]);
-        let file = serve("index.html", "title", "", "", &config)
+        let file = serve("index.html", "title", "", "", "", &config)
             .expect("serve should succeed")
             .expect("index.html should be served");
         let html = String::from_utf8(file.bytes.into_owned()).expect("utf8");

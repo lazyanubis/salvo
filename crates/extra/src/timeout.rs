@@ -95,9 +95,13 @@ impl Handler for Timeout {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
+        #[cfg(not(target_family = "wasm"))] // ? tokio timer 在 wasm 上不可用
+        let timeout_fut = tokio::time::sleep(self.value);
+        #[cfg(target_family = "wasm")] // ? tokio timer 在 wasm 上不可用
+        let timeout_fut = sleep(self.value);
         tokio::select! {
             _ = ctrl.call_next(req, depot, res) => {},
-            _ = tokio::time::sleep(self.value) => {
+            _ = timeout_fut => {
                 res.headers_mut().typed_insert(Connection::close());
                 res.render((self.error)());
                 ctrl.skip_rest();
@@ -106,7 +110,14 @@ impl Handler for Timeout {
     }
 }
 
-/// sleep
+/// Sleep for the given duration.
+#[cfg(not(target_family = "wasm"))] // ? tokio timer 在 wasm 上不可用
+pub async fn sleep(value: Duration) {
+    tokio::time::sleep(value).await;
+}
+
+/// Sleep for the given duration.
+#[cfg(target_family = "wasm")] // ? tokio timer 在 wasm 上不可用
 #[worker::send]
 pub async fn sleep(value: Duration) {
     let delay: worker::Delay = value.into();

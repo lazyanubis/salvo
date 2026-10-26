@@ -298,9 +298,10 @@ impl Router {
             }
 
             stack.pop();
-            {
-                let parent = stack.last()?;
+            if let Some(parent) = stack.last() {
                 parent.rollback(path_state);
+            } else {
+                return None;
             }
         }
     }

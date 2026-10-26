@@ -245,7 +245,7 @@ mod tests {
             std::future::pending::<()>().await;
         }
         let service = Service::new(Router::new().get(pending)).hoop(Logger::new());
-        let mut request = Box::pin(service.handle(TestClient::get("http://localhost/").build()));
+        let mut request = Box::pin(service.handle(TestClient::get("http://localhost/").build(), None));
         poll_fn(|cx| {
             assert!(request.as_mut().poll(cx).is_pending());
             Poll::Ready(())

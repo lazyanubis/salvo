@@ -1,15 +1,12 @@
-#[cfg(feature = "hidden-on-ra")] // hidden on rust-analyzer
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 use futures_util::TryStreamExt;
 use hyper::upgrade::OnUpgrade;
 use reqwest::Client as InnerClient;
 use salvo_core::Error;
 use salvo_core::http::{ResBody, StatusCode};
-// #[cfg(not(target_family = "wasm"))] // ? tokio::io
-// use salvo_core::rt::tokio::TokioIo; // hidden on rust-analyzer
-#[cfg(feature = "hidden-on-ra")]
-#[cfg(not(target_family = "wasm"))]
-use hyper_util::rt::TokioIo;
-#[cfg(feature = "hidden-on-ra")] // hidden on rust-analyzer
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
+use salvo_core::rt::tokio::TokioIo;
+#[cfg(not(target_family = "wasm"))] // ? tokio::io
 use tokio::io::copy_bidirectional;
 
 use crate::{BoxedError, Client, HyperRequest, HyperResponse, Proxy, Upstreams};
@@ -63,7 +60,7 @@ impl ReqwestClient {
 impl Client for ReqwestClient {
     type Error = salvo_core::Error;
 
-    #[cfg(feature = "hidden-on-ra")] // hidden on rust-analyzer
+    #[cfg(not(target_family = "wasm"))]
     async fn execute(
         &self,
         proxied_request: HyperRequest,
@@ -144,7 +141,7 @@ impl Client for ReqwestClient {
         Ok(hyper_response)
     }
 
-    #[cfg(not(feature = "hidden-on-ra"))] // hidden on rust-analyzer
+    #[cfg(target_family = "wasm")]
     #[worker::send]
     async fn execute(
         &self,

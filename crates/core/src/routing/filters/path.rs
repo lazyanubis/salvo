@@ -391,7 +391,7 @@ impl CombWisp {
                         wild_start = Some(star_mark.to_owned());
                         names.push(name.to_owned());
                     } else {
-                        comb_regex.push_str(&format!("(?<{}>.*)", regex::escape(&wisp.0)));
+                        comb_regex.push_str(&format!("(?<{}>.*)", &regex::escape(&wisp.0)));
                         names.push(wisp.0);
                     }
                 }
@@ -1053,7 +1053,7 @@ pub struct PathFilter {
 
 impl Debug for PathFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "path:{}", self.raw_value)
+        write!(f, "path:{}", &self.raw_value)
     }
 }
 #[async_trait]

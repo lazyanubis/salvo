@@ -741,7 +741,8 @@ pub(crate) fn upgrade_types_match(request: Option<&str>, response: Option<&str>)
 }
 
 // Unit tests for Proxy
-#[cfg(test)]
+// 这些测试依赖 hyper-client 后端，wasm 分支默认关闭该 feature
+#[cfg(all(test, feature = "hyper-client"))]
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
     use std::str::FromStr;

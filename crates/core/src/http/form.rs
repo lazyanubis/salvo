@@ -22,8 +22,6 @@ use rand::TryRng;
 use rand::rngs::SysRng;
 #[cfg(not(target_family = "wasm"))] // ? unsupported on wasm, no os
 use tempfile::Builder;
-#[cfg(not(target_family = "wasm"))] // ? tokio::io
-use tokio::io::AsyncWriteExt;
 
 use crate::http::ParseError;
 use crate::http::header::{CONTENT_TYPE, HeaderMap};
@@ -714,7 +712,7 @@ mod tests {
             (2, 0, crate::http::StatusCode::PAYLOAD_TOO_LARGE),
             (1, 1, crate::http::StatusCode::PAYLOAD_TOO_LARGE),
         ] {
-            let response = service.handle(multipart_request(parts, files)).await;
+            let response = service.handle(multipart_request(parts, files), None).await;
             assert_eq!(response.status_code, Some(status));
         }
     }

@@ -62,8 +62,7 @@ quinn = ["dep:salvo-http3", "dep:quinn", "dep:h3-datagram", "rustls"]
 rustls = ["dep:rustls", "dep:tokio-rustls", "dep:arc-swap"]
 native-tls = ["dep:tokio-native-tls", "dep:native-tls", "dep:arc-swap"]
 openssl = ["dep:openssl", "dep:tokio-openssl", "dep:arc-swap"]
-# unix = ["http1", "dep:nix"]
-unix = ["http1"]
+unix = ["http1", "dep:nix"]
 test = [
     "dep:brotli",
     "dep:flate2",
