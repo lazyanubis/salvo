@@ -11,7 +11,7 @@ edition = "2024"
 lto = true        # 用于启用链路时间优化
 opt-level = 'z'   # 优化级别
 codegen-units = 1 # 在整个crate中使用最高级别优化
-strip = true      # 剥离调试信息，减小输出大小
+strip = "debuginfo" # 不能用 true：strip=symbols 会删掉 target_features 段，wasm-bindgen 读不到 reference-types，报 externref table required for catch wrappers（workers-rs#1014）
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -38,8 +38,8 @@ salvo-worker = { path = "../salvo-worker", features = ["full"] }
 # 如果没有 console_error_panic_hook, 只会得到类似于 RuntimeError: Unreachable executed 的提示
 console_error_panic_hook = { version = "0.1.1" }
 # 绑定 Rust 到 Cloudflare Workers 环境。用 Rust 编写 Worker!
-worker = { version = "=0.8.3", features = ["http", "axum", "d1"] }
-worker-macros = { version = "=0.8.3", features = ["http"] }
+worker = { version = "=0.8.7", features = ["http", "axum", "d1"] }
+worker-macros = { version = "=0.8.7", features = ["http"] }
 tokio = { version = "1.52", default-features = false }
 
 # axum = { version = "0.8.3", default-features = false } # web 框架
