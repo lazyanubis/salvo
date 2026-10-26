@@ -19,7 +19,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["worker-store"]
+default = ["moka-store"]
 full = ["moka-store"]
 moka-store = ["dep:moka"]
 worker-store = ["dep:worker"]

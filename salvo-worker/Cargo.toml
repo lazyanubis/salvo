@@ -70,7 +70,13 @@ full = [
 
 [dependencies]
 # salvo = { path = "../crates/salvo", features = ["full"] }
-salvo_core = { workspace = true, features = ["default"] }
+salvo_core = { workspace = true, default-features = false, features = [
+    "cookie",
+    "fix-http1-request-uri",
+    "http1",
+    "matched-path",
+    "test",
+] }
 salvo_extra = { workspace = true, default-features = false, optional = true, features = [
     "affix-state",
 ] }
@@ -85,12 +91,24 @@ salvo-cache = { workspace = true, default-features = false, optional = true, fea
 # ] }
 salvo-cors = { workspace = true, optional = true }
 salvo-session = { workspace = true, optional = true }
-salvo-csrf = { workspace = true, optional = true, features = ["full"] }
+salvo-csrf = { workspace = true, default-features = false, optional = true, features = [
+    "cookie-store",
+    "session-store",
+    "hmac-cipher",
+    "aes-gcm-cipher",
+    "ccp-cipher",
+] }
 salvo-flash = { workspace = true, optional = true, features = ["full"] }
 salvo-jwt-auth = { workspace = true, optional = true, features = ["full"] }
 salvo-oapi = { workspace = true, optional = true, features = ["full"] }
-salvo-proxy = { workspace = true, optional = true, features = ["full"] }
-salvo-rate-limiter = { workspace = true, optional = true, features = ["full"] }
+salvo-proxy = { workspace = true, default-features = false, optional = true, features = [
+    "reqwest-client",
+] }
+salvo-rate-limiter = { workspace = true, default-features = false, optional = true, features = [
+    "worker-store",
+    "fixed-guard",
+    "sliding-guard",
+] }
 # salvo-serve-static = { workspace = true, optional = true, features = ["full"] }
 
 http = { workspace = true }

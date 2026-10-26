@@ -81,7 +81,7 @@ hyper = { workspace = true, features = [
     "client",
 ], optional = true }
 pin-project = { workspace = true, optional = true }
-salvo_core = { workspace = true }
+salvo_core = { workspace = true, default-features = false, features = ["cookie", "http1"] }
 serde = { workspace = true, features = ["derive"], optional = true }
 serde_json = { workspace = true, optional = true }
 # tokio = { workspace = true, optional = true }

@@ -270,14 +270,14 @@ mod tests {
         let store = MokaStore::<String, CountingGuard>::unbounded();
         assert!(
             store
-                .verify_guard("client".into(), &refer, &quota)
+                .verify_guard(&Depot::default(), "client".into(), &refer, &quota)
                 .await
                 .unwrap()
                 .allowed
         );
         assert!(
             !store
-                .verify_guard("client".into(), &refer, &quota)
+                .verify_guard(&Depot::default(), "client".into(), &refer, &quota)
                 .await
                 .unwrap()
                 .allowed
@@ -295,14 +295,14 @@ mod tests {
         let refer = FixedGuard::new();
         assert!(
             store
-                .verify_guard("client".into(), &refer, &quota)
+                .verify_guard(&Depot::default(), "client".into(), &refer, &quota)
                 .await
                 .unwrap()
                 .allowed
         );
         assert!(
             !store
-                .verify_guard("client".into(), &refer, &quota)
+                .verify_guard(&Depot::default(), "client".into(), &refer, &quota)
                 .await
                 .unwrap()
                 .allowed
@@ -310,7 +310,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(
             !store
-                .verify_guard("client".into(), &refer, &quota)
+                .verify_guard(&Depot::default(), "client".into(), &refer, &quota)
                 .await
                 .unwrap()
                 .allowed
@@ -334,7 +334,7 @@ mod tests {
             let key = key.clone();
 
             handles.push(tokio::spawn(async move {
-                let state = store.verify_guard(key, &refer, &quota).await.unwrap();
+                let state = store.verify_guard(&Depot::default(), key, &refer, &quota).await.unwrap();
                 if state.allowed {
                     allowed_count.fetch_add(1, Ordering::SeqCst);
                 }

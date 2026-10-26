@@ -106,8 +106,6 @@ use std::net::IpAddr;
 use salvo_core::handler::{Skipper, none_skipper};
 use salvo_core::http::{HeaderValue, Request, Response, StatusCode, StatusError};
 use salvo_core::{Depot, FlowCtrl, Handler, async_trait};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 
 mod quota;
 pub use quota::{BasicQuota, CelledQuota, QuotaGetter};
@@ -526,7 +524,7 @@ impl<G: RateGuard, S: RateStore, I: RateIssuer, P: QuotaGetter<I::Key>> RateLimi
 #[async_trait]
 impl<G, S, I, P> Handler for RateLimiter<G, S, I, P>
 where
-    G: RateGuard<Quota = P::Quota> + Serialize + DeserializeOwned,
+    G: RateGuard<Quota = P::Quota>,
     S: RateStore<Key = I::Key, Guard = G>,
     P: QuotaGetter<I::Key>,
     I: RateIssuer,
@@ -842,7 +840,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "203.0.113.10".parse::<IpAddr>().unwrap());
+        assert_eq!(ip, "203.0.113.10");
     }
 
     #[tokio::test]
@@ -852,7 +850,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "198.51.100.7".parse::<IpAddr>().unwrap());
+        assert_eq!(ip, "198.51.100.7");
     }
 
     #[tokio::test]
@@ -862,7 +860,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "10.0.0.5".parse::<IpAddr>().unwrap());
+        assert_eq!(ip, "10.0.0.5");
     }
 
     #[tokio::test]
@@ -872,7 +870,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "203.0.113.42".parse::<IpAddr>().unwrap());
+        assert_eq!(ip, "203.0.113.42");
     }
 
     #[tokio::test]
@@ -885,7 +883,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "198.51.100.7".parse::<IpAddr>().unwrap());
+        assert_eq!(ip, "198.51.100.7");
     }
 
     #[tokio::test]
@@ -900,7 +898,7 @@ mod tests {
         let depot = Depot::new();
 
         let ip = issuer.issue(&mut req, &depot).await.expect("ip");
-        assert_eq!(ip, "198.51.100.7".parse::<IpAddr>().unwrap());
+        assert_eq!(ip, "198.51.100.7");
     }
 
     #[test]

@@ -19,16 +19,11 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-# default = ["cookie-store", "bcrypt-cipher"]
-default = [
-    "cookie-store",
-    # "bcrypt-cipher"
-]
+default = ["cookie-store", "bcrypt-cipher"]
 full = [
     "cookie-store",
     "session-store",
     "bcrypt-cipher",
-    # "bcrypt-cipher",
     "hmac-cipher",
     "aes-gcm-cipher",
     "ccp-cipher",

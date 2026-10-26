@@ -80,8 +80,12 @@ new_classes = ["TestTemplateWebSocket2DurableObject"]
 
 # Bind a KV Namespace. Use KV as persistent storage for small key-value pairs.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#kv-namespaces
+#
+# /cache 与 /rate_limiter 依赖这个绑定，名字必须与代码里的 `KV_BINDING` 一致。
+# 创建：npx wrangler kv namespace create KV_TEST
+# 然后把返回的 id 填到下面，并取消注释（本地 dev 不会校验 id，可直接运行）。
 # [[kv_namespaces]]
-# binding = "KV_SERVICE_TEMPLATE"
+# binding = "KV_TEST"
 # id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # Bind a Queue producer. Use this binding to schedule an arbitrary task that may be processed later by a Queue consumer.

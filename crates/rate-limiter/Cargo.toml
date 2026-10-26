@@ -19,8 +19,8 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["worker-store", "fixed-guard", "sliding-guard"]
-full = ["worker-store", "fixed-guard", "sliding-guard"]
+default = ["moka-store", "fixed-guard", "sliding-guard"]
+full = ["moka-store", "fixed-guard", "sliding-guard"]
 moka-store = ["dep:moka"]
 worker-store = []
 fixed-guard = []
